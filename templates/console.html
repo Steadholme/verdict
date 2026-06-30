@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Authorization · Verdict · HOLDFAST</title>
+  <style>{{CSS}}</style>
+</head>
+<body class="page-console">
+{{TOPBAR}}
+<main class="console console--wide">
+  <div class="console__head">
+    <h1>Policy decision point</h1>
+    <p class="sub">Zanzibar-style relation tuples — <code>object#relation@subject</code>. A subject may be a concrete principal (<code>user:w33d</code>) or a userset (<code>group:eng#member</code>) to model indirection. Every backend consults <code>POST /api/check</code>.</p>
+  </div>
+
+  <div class="layout">
+    <section class="reading">
+      <div class="card">
+        <div class="card__head"><h2>Relation tuples</h2><span class="muted">{{COUNT}}</span></div>
+        <div class="table-wrap">
+          <table class="tuples">
+            <thead>
+              <tr><th>Object</th><th>Relation</th><th>Subject</th><th>Created</th><th></th></tr>
+            </thead>
+            <tbody>
+              {{ROWS}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2>Add tuple</h2></div>
+        <div class="card__body">
+          <form method="post" action="/" class="grid-form">
+            <input type="hidden" name="csrf_token" value="{{CSRF}}">
+            <div class="field">
+              <label for="a-object">Object</label>
+              <input type="text" id="a-object" name="object" autocomplete="off" spellcheck="false" placeholder="doc:roadmap" required>
+            </div>
+            <div class="field">
+              <label for="a-relation">Relation</label>
+              <input type="text" id="a-relation" name="relation" autocomplete="off" spellcheck="false" placeholder="viewer" required>
+            </div>
+            <div class="field">
+              <label for="a-subject">Subject</label>
+              <input type="text" id="a-subject" name="subject" autocomplete="off" spellcheck="false" placeholder="user:zed or group:eng#member" required>
+            </div>
+            <div class="actions">
+              <button class="btn btn-primary" type="submit">Add tuple</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <aside class="rail">
+      <section class="card">
+        <div class="card__head"><h2>Check tester</h2></div>
+        <div class="card__body">
+          {{CHECK_RESULT}}
+          <form method="get" action="/" class="save-form">
+            <div class="field">
+              <label for="ck-object">Object</label>
+              <input type="text" id="ck-object" name="ck_object" value="{{CK_OBJECT}}" autocomplete="off" spellcheck="false" placeholder="doc:secret">
+            </div>
+            <div class="field">
+              <label for="ck-relation">Relation</label>
+              <input type="text" id="ck-relation" name="ck_relation" value="{{CK_RELATION}}" autocomplete="off" spellcheck="false" placeholder="viewer">
+            </div>
+            <div class="field">
+              <label for="ck-subject">Subject</label>
+              <input type="text" id="ck-subject" name="ck_subject" value="{{CK_SUBJECT}}" autocomplete="off" spellcheck="false" placeholder="user:w33d">
+            </div>
+            <div class="actions"><button class="btn btn-secondary" type="submit">Run check</button></div>
+          </form>
+          <p class="hint hint--muted">Try <code>doc:secret · viewer · user:w33d</code> — allowed via <code>group:eng#member</code> indirection.</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card__head"><h2>Expand</h2></div>
+        <div class="card__body">
+          {{EXPAND_RESULT}}
+          <form method="get" action="/" class="save-form">
+            <div class="field">
+              <label for="ex-object">Object</label>
+              <input type="text" id="ex-object" name="ex_object" value="{{EX_OBJECT}}" autocomplete="off" spellcheck="false" placeholder="doc:secret">
+            </div>
+            <div class="field">
+              <label for="ex-relation">Relation</label>
+              <input type="text" id="ex-relation" name="ex_relation" value="{{EX_RELATION}}" autocomplete="off" spellcheck="false" placeholder="viewer">
+            </div>
+            <div class="actions"><button class="btn btn-secondary" type="submit">Who has it?</button></div>
+          </form>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card__head"><h2>List objects</h2></div>
+        <div class="card__body">
+          {{LISTOBJ_RESULT}}
+          <form method="get" action="/" class="save-form">
+            <div class="field">
+              <label for="lo-relation">Relation</label>
+              <input type="text" id="lo-relation" name="lo_relation" value="{{LO_RELATION}}" autocomplete="off" spellcheck="false" placeholder="viewer">
+            </div>
+            <div class="field">
+              <label for="lo-subject">Subject</label>
+              <input type="text" id="lo-subject" name="lo_subject" value="{{LO_SUBJECT}}" autocomplete="off" spellcheck="false" placeholder="user:w33d">
+            </div>
+            <div class="actions"><button class="btn btn-secondary" type="submit">What can they do?</button></div>
+          </form>
+        </div>
+      </section>
+    </aside>
+  </div>
+</main>
+</body>
+</html>
