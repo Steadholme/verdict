@@ -18,9 +18,13 @@
 //! - `GET  /`                   — admin console (browse + the three read tools)
 //! - `POST /`                   — add a relation tuple (CSRF)
 //! - `POST /delete`             — delete a relation tuple (CSRF)
+//! - `POST /import`             — bulk-import relation tuples (CSRF)
+//! - `GET  /export`             — export relation tuples as CSV/JSON
 //! - `POST /api/check`          — decide `(object, relation, subject)` (Bearer)
 //! - `POST /api/tuples`         — write a tuple (Bearer)
 //! - `POST /api/tuples/delete`  — delete a tuple (Bearer)
+//! - `POST /api/tuples/import`  — bulk-import tuples as CSV/JSON (Bearer)
+//! - `POST /api/tuples/export`  — export tuples as CSV/JSON (Bearer)
 //! - `POST /api/list-objects`   — objects a subject holds a relation on (Bearer)
 //! - `POST /api/expand`         — who holds a relation on an object (Bearer)
 
@@ -31,6 +35,7 @@ pub mod config;
 pub mod error;
 pub mod handlers;
 pub mod store;
+pub mod tuple_io;
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -58,12 +63,19 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(handlers::health::healthz))
         // --- SSO admin console ---
-        .route("/", get(handlers::console::index).post(handlers::console::add))
+        .route(
+            "/",
+            get(handlers::console::index).post(handlers::console::add),
+        )
         .route("/delete", post(handlers::console::delete))
+        .route("/import", post(handlers::console::import))
+        .route("/export", get(handlers::console::export))
         // --- /api/* decision API (own service-token auth inside the handlers) ---
         .route("/api/check", post(handlers::api::check_handler))
         .route("/api/tuples", post(handlers::api::write_tuple))
         .route("/api/tuples/delete", post(handlers::api::delete_tuple))
+        .route("/api/tuples/import", post(handlers::api::import_tuples))
+        .route("/api/tuples/export", post(handlers::api::export_tuples))
         .route("/api/list-objects", post(handlers::api::list_objects))
         .route("/api/expand", post(handlers::api::expand))
         .with_state(state)
@@ -108,7 +120,11 @@ pub async fn build_state_from_env() -> Result<AppState, String> {
             Arc::new(pg)
         }
         "memory" => Arc::new(InMemoryStore::new()),
-        other => return Err(format!("unknown VERDICT_STORE={other} (use memory|postgres)")),
+        other => {
+            return Err(format!(
+                "unknown VERDICT_STORE={other} (use memory|postgres)"
+            ))
+        }
     };
 
     // Seed the example tuple set on an empty store (idempotent — skipped when tuples already exist).
@@ -117,7 +133,9 @@ pub async fn build_state_from_env() -> Result<AppState, String> {
     if config.auth_enabled() {
         tracing::info!("/api/* service-token auth ENABLED");
     } else {
-        tracing::warn!("/api/* service-token auth DISABLED (VERDICT_SERVICE_TOKEN empty) — dev mode");
+        tracing::warn!(
+            "/api/* service-token auth DISABLED (VERDICT_SERVICE_TOKEN empty) — dev mode"
+        );
     }
 
     let audit = AuditSink::start(

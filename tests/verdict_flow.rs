@@ -60,7 +60,14 @@ fn parse(bytes: &[u8]) -> Value {
 #[tokio::test]
 async fn healthz_is_public_and_plain_ok() {
     let state = seeded_state().await;
-    let (status, body) = call(&state, Request::builder().uri("/healthz").body(Body::empty()).unwrap()).await;
+    let (status, body) = call(
+        &state,
+        Request::builder()
+            .uri("/healthz")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, b"ok");
 }
@@ -228,7 +235,10 @@ async fn api_list_objects_and_expand() {
     )
     .await;
     let objs = parse(&body)["objects"].as_array().unwrap().clone();
-    let objs: Vec<String> = objs.iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    let objs: Vec<String> = objs
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
     assert_eq!(objs, vec!["doc:readme", "doc:secret"]);
 
     let (_, body) = call(
@@ -243,6 +253,9 @@ async fn api_list_objects_and_expand() {
     let v = parse(&body);
     assert_eq!(v["direct"][0], "group:eng#member");
     assert_eq!(v["members"][0], "user:w33d");
+    assert_eq!(v["tree"][0]["subject"], "group:eng#member");
+    assert_eq!(v["tree"][0]["userset"], true);
+    assert_eq!(v["tree"][0]["children"][0]["subject"], "user:w33d");
 }
 
 #[tokio::test]
@@ -258,6 +271,89 @@ async fn api_rejects_invalid_triple() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn api_imports_and_exports_tuples_as_json_and_csv() {
+    let state = seeded_state().await;
+
+    let (status, body) = call(
+        &state,
+        api_post(
+            Some(SERVICE_TOKEN),
+            "/api/tuples/import",
+            json!({"tuples":[{"object":"doc:bulk","relation":"viewer","subject":"user:bulk"}]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let report = parse(&body);
+    assert_eq!(report["total"], 1);
+    assert_eq!(report["written"], 1);
+    assert_eq!(report["skipped"], 0);
+    assert!(state
+        .store
+        .subjects_for("doc:bulk", "viewer")
+        .await
+        .contains(&"user:bulk".to_string()));
+
+    let (_, body) = call(
+        &state,
+        api_post(
+            Some(SERVICE_TOKEN),
+            "/api/tuples/import",
+            json!({"format":"csv","content":"object,relation,subject\ndoc:csv,viewer,user:csv\n"}),
+        ),
+    )
+    .await;
+    assert_eq!(parse(&body)["written"], 1);
+
+    let (status, body) = call(
+        &state,
+        api_post(
+            Some(SERVICE_TOKEN),
+            "/api/tuples/export",
+            json!({"format":"json"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let exported = parse(&body);
+    assert!(exported["tuples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|t| t["object"] == "doc:bulk"));
+
+    let (status, body) = call(
+        &state,
+        api_post(
+            Some(SERVICE_TOKEN),
+            "/api/tuples/export",
+            json!({"format":"csv"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let csv = String::from_utf8(body).unwrap();
+    assert!(csv.starts_with("object,relation,subject\n"));
+    assert!(csv.contains("doc:csv,viewer,user:csv"));
+
+    let (status, _) = call(
+        &state,
+        api_post(
+            Some(SERVICE_TOKEN),
+            "/api/tuples/import",
+            json!({"tuples":[{"object":"doc:bad","relation":"view er","subject":"user:bad"}]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(state
+        .store
+        .subjects_for("doc:bad", "view er")
+        .await
+        .is_empty());
 }
 
 // ---- Console (SSO) --------------------------------------------------------
@@ -289,13 +385,25 @@ async fn console_renders_seeded_tuples_and_tester_path() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let html = String::from_utf8(
-        axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap().to_vec(),
+        axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
     )
     .unwrap();
-    assert!(html.contains("group:eng#member"), "seeded userset tuple shown");
+    assert!(
+        html.contains("group:eng#member"),
+        "seeded userset tuple shown"
+    );
     assert!(html.contains("ALLOWED"), "tester verdict rendered");
-    assert!(html.contains("doc:secret#viewer@group:eng#member"), "resolution path step shown");
-    assert!(html.contains("admin@w33d.xyz"), "signed-in identity in top bar");
+    assert!(
+        html.contains("doc:secret#viewer@group:eng#member"),
+        "resolution path step shown"
+    );
+    assert!(
+        html.contains("admin@w33d.xyz"),
+        "signed-in identity in top bar"
+    );
 }
 
 #[tokio::test]
@@ -317,7 +425,8 @@ async fn console_add_and_delete_with_csrf() {
     let csrf = csrf_from_cookie(resp.headers()).expect("fresh CSRF cookie minted");
 
     // POST add with a matching cookie + form token.
-    let add_body = "object=doc:plan&relation=viewer&subject=user:zed&csrf_token=".to_string() + &csrf;
+    let add_body =
+        "object=doc:plan&relation=viewer&subject=user:zed&csrf_token=".to_string() + &csrf;
     let resp = app(state.clone())
         .oneshot(
             Request::builder()
@@ -333,7 +442,11 @@ async fn console_add_and_delete_with_csrf() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-    assert!(state.store.subjects_for("doc:plan", "viewer").await.contains(&"user:zed".to_string()));
+    assert!(state
+        .store
+        .subjects_for("doc:plan", "viewer")
+        .await
+        .contains(&"user:zed".to_string()));
 
     // A mismatched CSRF token is rejected (401).
     let bad = "object=doc:plan&relation=viewer&subject=user:evil&csrf_token=wrong";
@@ -353,7 +466,8 @@ async fn console_add_and_delete_with_csrf() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 
     // Delete the tuple we added.
-    let del_body = "object=doc:plan&relation=viewer&subject=user:zed&csrf_token=".to_string() + &csrf;
+    let del_body =
+        "object=doc:plan&relation=viewer&subject=user:zed&csrf_token=".to_string() + &csrf;
     let resp = app(state.clone())
         .oneshot(
             Request::builder()
@@ -368,7 +482,103 @@ async fn console_add_and_delete_with_csrf() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-    assert!(state.store.subjects_for("doc:plan", "viewer").await.is_empty());
+    assert!(state
+        .store
+        .subjects_for("doc:plan", "viewer")
+        .await
+        .is_empty());
+}
+
+#[tokio::test]
+async fn console_imports_and_exports_with_csrf() {
+    let state = seeded_state().await;
+
+    let resp = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .header("x-auth-subject", "u_admin")
+                .header("x-auth-email", "admin@w33d.xyz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let csrf = csrf_from_cookie(resp.headers()).expect("fresh CSRF cookie minted");
+
+    let import_body = format!(
+        "format=csv&content=object%2Crelation%2Csubject%0Adoc%3Aconsole%2Cviewer%2Cuser%3Azed&csrf_token={csrf}"
+    );
+    let resp = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/import")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, format!("__Host-csrf={csrf}"))
+                .header("x-auth-subject", "u_admin")
+                .header("x-auth-email", "admin@w33d.xyz")
+                .body(Body::from(import_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        resp.headers().get(header::LOCATION).unwrap(),
+        "/?import_total=1&import_written=1&import_skipped=0"
+    );
+    assert!(state
+        .store
+        .subjects_for("doc:console", "viewer")
+        .await
+        .contains(&"user:zed".to_string()));
+
+    let resp = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/?import_total=1&import_written=1&import_skipped=0")
+                .header("x-auth-subject", "u_admin")
+                .header("x-auth-email", "admin@w33d.xyz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains("Imported 1/1 tuple(s). 0 duplicate/existing."));
+    assert!(html.contains("Import / export"));
+
+    let resp = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/export?format=json")
+                .header("x-auth-subject", "u_admin")
+                .header("x-auth-email", "admin@w33d.xyz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/json; charset=utf-8"
+    );
+    let body = String::from_utf8(
+        axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(body.contains("doc:console"));
 }
 
 #[tokio::test]

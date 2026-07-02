@@ -5,9 +5,9 @@
 //! tuples; run a live **check tester** (object/relation/subject -> allowed + the resolution path);
 //! **expand** a relation (who holds it on an object); and **list objects** (what a subject can do).
 //!
-//! The three read tools are `GET /` with query parameters (read-only — no CSRF needed). The two
-//! mutations (`POST /`, `POST /delete`) are double-submit CSRF protected. Every interpolated field
-//! is HTML-escaped; the inputs are opaque tuple tokens, never markup.
+//! The three read tools are `GET /` with query parameters (read-only — no CSRF needed). Tuple
+//! mutations (`POST /`, `POST /delete`, `POST /import`) are double-submit CSRF protected. Every
+//! interpolated field is HTML-escaped; the inputs are opaque tuple tokens, never markup.
 
 use axum::extract::{Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -20,6 +20,7 @@ use crate::check;
 use crate::error::AppError;
 use crate::handlers::{esc, fmt_date, topbar, APP_CSS};
 use crate::store::Tuple;
+use crate::tuple_io;
 use crate::{auth, now_nanos, now_secs, AppState};
 
 const CONSOLE_HTML: &str = include_str!("../../templates/console.html");
@@ -42,6 +43,12 @@ pub struct ConsoleQuery {
     lo_relation: Option<String>,
     #[serde(default)]
     lo_subject: Option<String>,
+    #[serde(default)]
+    import_total: Option<usize>,
+    #[serde(default)]
+    import_written: Option<usize>,
+    #[serde(default)]
+    import_skipped: Option<usize>,
 }
 
 /// Add-tuple form body. Identity is NEVER taken from the form — only from the gateway headers.
@@ -55,6 +62,24 @@ pub struct TupleForm {
     pub subject: String,
     #[serde(default)]
     pub csrf_token: String,
+}
+
+/// Bulk import form body. Identity is NEVER taken from the form — only from the gateway headers.
+#[derive(Debug, Deserialize)]
+pub struct ImportForm {
+    #[serde(default)]
+    pub format: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub csrf_token: String,
+}
+
+/// `GET /export?format=json|csv`.
+#[derive(Debug, Default, Deserialize)]
+pub struct ExportQuery {
+    #[serde(default)]
+    pub format: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +103,7 @@ pub async fn index(
     let check_result = render_check(&state, &q).await;
     let expand_result = render_expand(&state, &q).await;
     let listobj_result = render_list_objects(&state, &q).await;
+    let import_result = render_import_result(&q);
 
     let page = CONSOLE_HTML
         .replace("{{CSS}}", APP_CSS)
@@ -86,6 +112,7 @@ pub async fn index(
         .replace("{{CSRF}}", &esc(&csrf))
         .replace("{{COUNT}}", &count.to_string())
         .replace("{{ROWS}}", &rows)
+        .replace("{{IMPORT_RESULT}}", &import_result)
         .replace("{{CK_OBJECT}}", &esc(opt(&q.ck_object)))
         .replace("{{CK_RELATION}}", &esc(opt(&q.ck_relation)))
         .replace("{{CK_SUBJECT}}", &esc(opt(&q.ck_subject)))
@@ -152,7 +179,10 @@ pub async fn delete(
     }
     let (object, relation, subject) = validate(&form)?;
 
-    let deleted = state.store.delete_tuple(&object, &relation, &subject).await?;
+    let deleted = state
+        .store
+        .delete_tuple(&object, &relation, &subject)
+        .await?;
     if deleted {
         state.audit.emit(AuditEvent::warning(
             "verdict.tuple.write",
@@ -163,6 +193,87 @@ pub async fn delete(
         tracing::info!(object = %object, relation = %relation, subject = %subject, "tuple deleted");
     }
     Ok(redirect("/"))
+}
+
+// ---------------------------------------------------------------------------
+// POST /import — bulk import tuples
+// ---------------------------------------------------------------------------
+
+/// `POST /import` — bulk-import relation tuples (CSRF-checked), then bounce back to the console.
+pub async fn import(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<ImportForm>,
+) -> Result<Response, AppError> {
+    let id = auth::identity(&headers);
+    if !auth::verify_csrf(&headers, &form.csrf_token) {
+        return Err(AppError::Unauthorized("CSRF token mismatch".to_string()));
+    }
+
+    let format = if form.format.trim().is_empty() {
+        "json"
+    } else {
+        form.format.trim()
+    };
+    let rows =
+        tuple_io::parse_import_text(format, &form.content).map_err(AppError::InvalidRequest)?;
+    let report = tuple_io::write_import(state.store.as_ref(), &rows).await?;
+    state.audit.emit(AuditEvent::info(
+        "verdict.tuple.import",
+        &id.email,
+        "tuples",
+        &format!(
+            "imported {} tuple(s); {} duplicate/existing (console)",
+            report.written, report.skipped
+        ),
+    ));
+    tracing::info!(
+        total = report.total,
+        written = report.written,
+        skipped = report.skipped,
+        "tuple import completed"
+    );
+
+    Ok(redirect(&format!(
+        "/?import_total={}&import_written={}&import_skipped={}",
+        report.total, report.written, report.skipped
+    )))
+}
+
+// ---------------------------------------------------------------------------
+// GET /export — download tuples
+// ---------------------------------------------------------------------------
+
+/// `GET /export?format=json|csv` — export all tuples. Read-only; gateway SSO protects the page.
+pub async fn export(State(state): State<AppState>, Query(q): Query<ExportQuery>) -> Response {
+    let tuples = state.store.all_tuples().await;
+    match q
+        .format
+        .as_deref()
+        .unwrap_or("json")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "json" => download_response(
+            "application/json; charset=utf-8",
+            "tuples.json",
+            tuple_io::export_json(&tuples),
+        ),
+        "csv" => download_response(
+            "text/csv; charset=utf-8",
+            "tuples.csv",
+            tuple_io::export_csv(&tuples),
+        ),
+        other => (
+            StatusCode::BAD_REQUEST,
+            Html(crate::handlers::error_page(
+                StatusCode::BAD_REQUEST,
+                &format!("unsupported export format {other:?} (use json or csv)"),
+            )),
+        )
+            .into_response(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -261,22 +372,26 @@ async fn render_expand(state: &AppState, q: &ConsoleQuery) -> String {
     let e = check::expand(state.store.as_ref(), object, relation).await;
     let direct = chips(&e.direct, "no direct grants");
     let members = chips(&e.members, "no concrete members");
+    let tree = access_tree(&e.tree);
 
     format!(
         r#"<div class="result result--info">
   <div class="result__head"><code class="result__query">{q}</code></div>
   <p class="result__note">Direct grants:</p>{direct}
   <p class="result__note">Resolved members (usersets flattened):</p>{members}
+  <p class="result__note">Access tree:</p>{tree}
 </div>"#,
         q = esc(&format!("{object}#{relation}")),
         direct = direct,
         members = members,
+        tree = tree,
     )
 }
 
 /// Render the list-objects result panel (empty string when it was not run).
 async fn render_list_objects(state: &AppState, q: &ConsoleQuery) -> String {
-    let (Some(relation), Some(subject)) = (nonempty(&q.lo_relation), nonempty(&q.lo_subject)) else {
+    let (Some(relation), Some(subject)) = (nonempty(&q.lo_relation), nonempty(&q.lo_subject))
+    else {
         return String::new();
     };
 
@@ -301,11 +416,62 @@ fn chips(items: &[String], empty: &str) -> String {
     }
     let mut out = String::from(r#"<div class="chips">"#);
     for item in items {
-        let klass = if check::is_userset(item) { "chip chip--userset" } else { "chip" };
+        let klass = if check::is_userset(item) {
+            "chip chip--userset"
+        } else {
+            "chip"
+        };
         out.push_str(&format!(r#"<span class="{klass}">{}</span>"#, esc(item)));
     }
     out.push_str("</div>");
     out
+}
+
+fn access_tree(nodes: &[check::ExpansionNode]) -> String {
+    if nodes.is_empty() {
+        return r#"<p class="muted result__empty">no grants</p>"#.to_string();
+    }
+    let mut out = String::from(r#"<ul class="access-tree">"#);
+    for node in nodes {
+        render_access_node(node, &mut out);
+    }
+    out.push_str("</ul>");
+    out
+}
+
+fn render_access_node(node: &check::ExpansionNode, out: &mut String) {
+    let klass = if node.userset {
+        "access-tree__token access-tree__token--userset"
+    } else {
+        "access-tree__token"
+    };
+    out.push_str(&format!(
+        r#"<li><span class="{klass}">{subject}</span>"#,
+        klass = klass,
+        subject = esc(&node.subject),
+    ));
+    if !node.children.is_empty() {
+        out.push_str(r#"<ul class="access-tree">"#);
+        for child in &node.children {
+            render_access_node(child, out);
+        }
+        out.push_str("</ul>");
+    }
+    out.push_str("</li>");
+}
+
+fn render_import_result(q: &ConsoleQuery) -> String {
+    let (Some(total), Some(written), Some(skipped)) =
+        (q.import_total, q.import_written, q.import_skipped)
+    else {
+        return String::new();
+    };
+    format!(
+        r#"<div class="notice notice-ok import-status">Imported {written}/{total} tuple(s). {skipped} duplicate/existing.</div>"#,
+        total = total,
+        written = written,
+        skipped = skipped,
+    )
 }
 
 /// Validate + trim an add/delete form's triple. Each field non-empty, no internal whitespace.
@@ -318,14 +484,22 @@ fn validate(form: &TupleForm) -> Result<(String, String, String), AppError> {
             "object, relation and subject are required".to_string(),
         ));
     }
-    for (label, v) in [("object", object), ("relation", relation), ("subject", subject)] {
+    for (label, v) in [
+        ("object", object),
+        ("relation", relation),
+        ("subject", subject),
+    ] {
         if v.split_whitespace().count() != 1 {
             return Err(AppError::InvalidRequest(format!(
                 "{label} must not contain whitespace"
             )));
         }
     }
-    Ok((object.to_string(), relation.to_string(), subject.to_string()))
+    Ok((
+        object.to_string(),
+        relation.to_string(),
+        subject.to_string(),
+    ))
 }
 
 /// Borrow a trimmed non-empty value from an optional query field.
@@ -342,9 +516,24 @@ fn opt(field: &Option<String>) -> &str {
 fn redirect(location: &str) -> Response {
     (
         StatusCode::SEE_OTHER,
-        [(header::LOCATION, HeaderValue::from_str(location).expect("valid location"))],
+        [(
+            header::LOCATION,
+            HeaderValue::from_str(location).expect("valid location"),
+        )],
     )
         .into_response()
+}
+
+fn download_response(content_type: &'static str, filename: &'static str, body: String) -> Response {
+    let mut resp = (StatusCode::OK, body).into_response();
+    resp.headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    resp.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+            .expect("valid content-disposition"),
+    );
+    resp
 }
 
 /// An HTML response, optionally attaching a freshly-minted CSRF `Set-Cookie`.

@@ -48,6 +48,10 @@ pub trait Store: Send + Sync {
     /// browse view.
     async fn list_tuples(&self) -> Vec<Tuple>;
 
+    /// All tuples, newest-first (`created_at` DESC). Drives explicit export paths; unlike
+    /// [`Store::list_tuples`], this is not capped for the browse UI.
+    async fn all_tuples(&self) -> Vec<Tuple>;
+
     /// The subjects granted `(object, relation)` — both concrete principals and usersets. This is
     /// the single read the check engine fans out over.
     async fn subjects_for(&self, object: &str, relation: &str) -> Vec<String>;
@@ -95,6 +99,13 @@ impl Store for InMemoryStore {
         // Newest-first; ties broken by id so output is stable.
         v.sort_by(|a, b| b.created_at.cmp(&a.created_at).then_with(|| b.id.cmp(&a.id)));
         v.truncate(LIST_LIMIT);
+        v
+    }
+
+    async fn all_tuples(&self) -> Vec<Tuple> {
+        let tuples = self.tuples.lock().expect("tuples lock poisoned");
+        let mut v: Vec<Tuple> = tuples.clone();
+        v.sort_by(|a, b| b.created_at.cmp(&a.created_at).then_with(|| b.id.cmp(&a.id)));
         v
     }
 
@@ -223,6 +234,16 @@ impl PgStore {
         rows.iter().map(Self::tuple_from_row).collect()
     }
 
+    async fn all_tuples_async(&self) -> Result<Vec<Tuple>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, object, relation, subject, created_at \
+             FROM tuples ORDER BY created_at DESC, id DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(Self::tuple_from_row).collect()
+    }
+
     async fn subjects_for_async(
         &self,
         object: &str,
@@ -291,6 +312,13 @@ impl Store for PgStore {
         })
     }
 
+    async fn all_tuples(&self) -> Vec<Tuple> {
+        self.all_tuples_async().await.unwrap_or_else(|e| {
+            tracing::error!(error = %e, "pg all_tuples failed");
+            Vec::new()
+        })
+    }
+
     async fn subjects_for(&self, object: &str, relation: &str) -> Vec<String> {
         self.subjects_for_async(object, relation)
             .await
@@ -348,6 +376,7 @@ mod tests {
         // Same triple again -> not newly inserted.
         assert!(!s.add_tuple(&tup("doc:a", "viewer", "user:w33d")).await.unwrap());
         assert_eq!(s.list_tuples().await.len(), 1);
+        assert_eq!(s.all_tuples().await.len(), 1);
     }
 
     #[tokio::test]

@@ -71,6 +71,11 @@ async fn pg_store_full_integration() {
     subs.sort();
     assert_eq!(subs, vec!["group:eng#member"]);
     assert!(pg.objects_with_relation("viewer").await.contains(&"doc:secret".to_string()));
+    assert!(pg
+        .all_tuples()
+        .await
+        .iter()
+        .any(|t| t.object == "doc:secret" && t.relation == "viewer"));
 
     // --- the check engine over the PG-backed store -------------------------
     let direct = check::check(pg.as_ref(), "doc:readme", "viewer", "user:w33d").await;

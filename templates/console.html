@@ -54,6 +54,34 @@
           </form>
         </div>
       </div>
+
+      <div class="card">
+        <div class="card__head"><h2>Import / export</h2></div>
+        <div class="card__body">
+          {{IMPORT_RESULT}}
+          <div class="export-actions">
+            <a class="btn btn-secondary" href="/export?format=json">Export JSON</a>
+            <a class="btn btn-secondary" href="/export?format=csv">Export CSV</a>
+          </div>
+          <form method="post" action="/import" class="save-form import-form">
+            <input type="hidden" name="csrf_token" value="{{CSRF}}">
+            <div class="field">
+              <label for="im-format">Format</label>
+              <select id="im-format" name="format">
+                <option value="json">JSON</option>
+                <option value="csv">CSV</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="im-content">Tuples</label>
+              <textarea id="im-content" name="content" spellcheck="false" placeholder='[{"object":"doc:roadmap","relation":"viewer","subject":"user:zed"}]' required></textarea>
+            </div>
+            <div class="actions">
+              <button class="btn btn-primary" type="submit">Import tuples</button>
+            </div>
+          </form>
+        </div>
+      </div>
     </section>
 
     <aside class="rail">

@@ -15,6 +15,8 @@ use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 
+use serde::Serialize;
+
 use crate::store::Store;
 
 /// Maximum levels of userset indirection followed during expansion.
@@ -127,11 +129,22 @@ pub async fn list_objects(store: &dyn Store, relation: &str, subject: &str) -> V
 }
 
 /// Result of an [`expand`]: the raw subjects directly granted the relation (usersets included),
-/// plus the fully-resolved set of concrete principals (usersets flattened up to [`MAX_DEPTH`]).
+/// the fully-resolved set of concrete principals (usersets flattened up to [`MAX_DEPTH`]), plus a
+/// tree preserving the userset hops for the console's "who-can-access" view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Expansion {
     pub direct: Vec<String>,
     pub members: Vec<String>,
+    pub tree: Vec<ExpansionNode>,
+}
+
+/// One node in an [`Expansion`] tree. `subject` is the tuple subject shown at this level; userset
+/// subjects carry children resolved from their referenced `(object, relation)`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExpansionNode {
+    pub subject: String,
+    pub userset: bool,
+    pub children: Vec<ExpansionNode>,
 }
 
 /// `expand`: who holds `relation` on `object`. Returns the direct grants and the flattened set of
@@ -143,6 +156,7 @@ pub async fn expand(store: &dyn Store, object: &str, relation: &str) -> Expansio
     let mut members: BTreeSet<String> = BTreeSet::new();
     let mut seen: HashSet<(String, String)> = HashSet::new();
     let mut queue: VecDeque<(String, String, usize)> = VecDeque::new();
+    let mut tree = Vec::new();
 
     for s in &direct {
         match parse_userset(s) {
@@ -151,6 +165,7 @@ pub async fn expand(store: &dyn Store, object: &str, relation: &str) -> Expansio
                 members.insert(s.clone());
             }
         }
+        tree.push(expansion_node(store, s.clone(), 1, &mut HashSet::new()).await);
     }
 
     while let Some((o, r, depth)) = queue.pop_front() {
@@ -173,7 +188,46 @@ pub async fn expand(store: &dyn Store, object: &str, relation: &str) -> Expansio
     Expansion {
         direct,
         members: members.into_iter().collect(),
+        tree,
     }
+}
+
+fn expansion_node<'a>(
+    store: &'a dyn Store,
+    subject: String,
+    depth: usize,
+    seen: &'a mut HashSet<(String, String)>,
+) -> Pin<Box<dyn Future<Output = ExpansionNode> + Send + 'a>> {
+    Box::pin(async move {
+        let Some((object, relation)) = parse_userset(&subject) else {
+            return ExpansionNode {
+                subject,
+                userset: false,
+                children: Vec::new(),
+            };
+        };
+
+        let mut node = ExpansionNode {
+            subject: subject.clone(),
+            userset: true,
+            children: Vec::new(),
+        };
+        if depth > MAX_DEPTH {
+            return node;
+        }
+
+        let key = (object.to_string(), relation.to_string());
+        if !seen.insert(key.clone()) {
+            return node;
+        }
+
+        for child in store.subjects_for(object, relation).await {
+            node.children
+                .push(expansion_node(store, child, depth + 1, seen).await);
+        }
+        seen.remove(&key);
+        node
+    })
 }
 
 #[cfg(test)]
@@ -270,5 +324,10 @@ mod tests {
         let e = expand(&s, "doc:secret", "viewer").await;
         assert_eq!(e.direct, vec!["group:eng#member"]);
         assert_eq!(e.members, vec!["user:w33d"]);
+        assert_eq!(e.tree.len(), 1);
+        assert_eq!(e.tree[0].subject, "group:eng#member");
+        assert!(e.tree[0].userset);
+        assert_eq!(e.tree[0].children[0].subject, "user:w33d");
+        assert!(!e.tree[0].children[0].userset);
     }
 }

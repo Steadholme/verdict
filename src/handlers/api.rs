@@ -10,19 +10,22 @@
 //! - `POST /api/check`         `{object, relation, subject}` -> `{allowed, via}`
 //! - `POST /api/tuples`        `{object, relation, subject}` -> `{ok, written}` (write a tuple)
 //! - `POST /api/tuples/delete` `{object, relation, subject}` -> `{ok, deleted}`
+//! - `POST /api/tuples/import` CSV/JSON tuple import -> `{ok, total, written, skipped}`
+//! - `POST /api/tuples/export` `{format}` -> JSON or CSV tuple export
 //! - `POST /api/list-objects`  `{relation, subject}`         -> `{objects}`
-//! - `POST /api/expand`        `{object, relation}`          -> `{direct, members}`
+//! - `POST /api/expand`        `{object, relation}`          -> `{direct, members, tree}`
 
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::audit::AuditEvent;
 use crate::check;
 use crate::store::Tuple;
+use crate::tuple_io;
 use crate::{auth, now_nanos, now_secs, AppState};
 
 /// `{ "object": "...", "relation": "...", "subject": "..." }` — the request body shared by
@@ -55,6 +58,13 @@ pub struct ExpandReq {
     pub relation: String,
 }
 
+/// `{ "format": "json" | "csv" }` — the tuple export request.
+#[derive(Debug, Deserialize)]
+pub struct ExportReq {
+    #[serde(default)]
+    pub format: Option<String>,
+}
+
 /// `{ "allowed": bool, "via": [...] }`.
 #[derive(Debug, Serialize)]
 pub struct CheckResp {
@@ -78,14 +88,7 @@ pub async fn check_handler(
     };
 
     let outcome = check::check(state.store.as_ref(), &object, &relation, &subject).await;
-    if !outcome.allowed {
-        state.audit.emit(AuditEvent::notice(
-            "verdict.check.deny",
-            &auth::api_actor(&headers),
-            &check::tuple_label(&object, &relation, &subject),
-            "no grant path",
-        ));
-    }
+    audit_check_decision(&state, &headers, &object, &relation, &subject, &outcome);
     (
         StatusCode::OK,
         Json(CheckResp {
@@ -163,6 +166,74 @@ pub async fn delete_tuple(
     }
 }
 
+/// `POST /api/tuples/import` — bulk-import tuples from JSON or CSV. The body may be a JSON array,
+/// `{ "tuples": [...] }`, or `{ "format": "csv|json", "content": "..." }`.
+pub async fn import_tuples(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    if let Some(resp) = guard(&state, &headers) {
+        return resp;
+    }
+
+    let rows = match tuple_io::parse_import_value(&body) {
+        Ok(rows) => rows,
+        Err(msg) => return json_err(StatusCode::BAD_REQUEST, &msg),
+    };
+    match tuple_io::write_import(state.store.as_ref(), &rows).await {
+        Ok(report) => {
+            state.audit.emit(AuditEvent::info(
+                "verdict.tuple.import",
+                &auth::api_actor(&headers),
+                "tuples",
+                &format!(
+                    "imported {} tuple(s); {} duplicate/existing",
+                    report.written, report.skipped
+                ),
+            ));
+            (StatusCode::OK, Json(report)).into_response()
+        }
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+/// `POST /api/tuples/export` — export all tuples as JSON (default) or CSV.
+pub async fn export_tuples(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ExportReq>,
+) -> Response {
+    if let Some(resp) = guard(&state, &headers) {
+        return resp;
+    }
+
+    let tuples = state.store.all_tuples().await;
+    match req
+        .format
+        .as_deref()
+        .unwrap_or("json")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "json" => (
+            StatusCode::OK,
+            Json(json!({ "tuples": tuple_io::export_rows(&tuples) })),
+        )
+            .into_response(),
+        "csv" => download_response(
+            "text/csv; charset=utf-8",
+            "tuples.csv",
+            tuple_io::export_csv(&tuples),
+        ),
+        other => json_err(
+            StatusCode::BAD_REQUEST,
+            &format!("unsupported export format {other:?} (use json or csv)"),
+        ),
+    }
+}
+
 /// `POST /api/list-objects` — objects on which `subject` holds `relation`.
 pub async fn list_objects(
     State(state): State<AppState>,
@@ -198,7 +269,7 @@ pub async fn expand(
     let e = check::expand(state.store.as_ref(), object, relation).await;
     (
         StatusCode::OK,
-        Json(json!({ "direct": e.direct, "members": e.members })),
+        Json(json!({ "direct": e.direct, "members": e.members, "tree": e.tree })),
     )
         .into_response()
 }
@@ -215,6 +286,45 @@ fn guard(state: &AppState, headers: &HeaderMap) -> Option<Response> {
     } else {
         Some(json_err(StatusCode::UNAUTHORIZED, "missing or invalid service token"))
     }
+}
+
+fn audit_check_decision(
+    state: &AppState,
+    headers: &HeaderMap,
+    object: &str,
+    relation: &str,
+    subject: &str,
+    outcome: &check::CheckOutcome,
+) {
+    let actor = auth::api_actor(headers);
+    let target = check::tuple_label(object, relation, subject);
+    if outcome.allowed {
+        state.audit.emit(AuditEvent::info(
+            "verdict.check.allow",
+            &actor,
+            &target,
+            &format!("allowed via {} step(s)", outcome.via.len()),
+        ));
+    } else {
+        state.audit.emit(AuditEvent::notice(
+            "verdict.check.deny",
+            &actor,
+            &target,
+            "no grant path",
+        ));
+    }
+}
+
+fn download_response(content_type: &'static str, filename: &'static str, body: String) -> Response {
+    let mut resp = (StatusCode::OK, body).into_response();
+    resp.headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    resp.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+            .expect("valid content-disposition"),
+    );
+    resp
 }
 
 /// Validate + trim a `(object, relation, subject)` triple. Each field must be non-empty after
