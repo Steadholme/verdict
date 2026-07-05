@@ -1,0 +1,119 @@
+/* Verdict service surface, layered after Odyssey canonical CSS.
+   Only the policy-decision-point domain lives here: the relation-tuple table cells,
+   subject/userset tokens, the ALLOWED/DENIED verdict panels, the resolution-path list,
+   expand chips, the access tree, and the error page. Everything base/token/button/
+   card/field/pill/table/empty is canonical (odyssey). */
+
+/* Canonical ships ok/warn/down/info hairline-border tokens but not an accent one;
+   Verdict's userset tint needs it. Reuse the canonical soft-2 indigo. */
+:root { --accent-border: var(--accent-soft-2); }
+
+/* Top-bar right-side helpers rendered by Verdict's topbar() (not the canonical usermenu). */
+.allapps {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
+  border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface);
+  font-size: 12.5px; font-weight: 500; color: var(--ink-2);
+}
+.allapps:hover { background: var(--bg-2); color: var(--ink); }
+.allapps svg { width: 14px; height: 14px; opacity: .8; }
+.userchip { display: inline-flex; align-items: center; gap: 8px; padding-left: 4px; }
+.userchip__avatar {
+  width: 28px; height: 28px; border-radius: 8px; flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent); color: #fff; font-weight: 600; font-size: 12px;
+}
+.user-email { font-size: 13px; color: var(--ink-2); font-weight: 500; }
+@media (max-width: 640px) { .user-email { display: none; } }
+
+/* Wide two-column policy workbench; bare cards stack vertically in each column. */
+.console--wide { max-width: 1180px; }
+.card + .card { margin-top: 20px; }
+.reading, .rail { min-width: 0; }
+
+/* Long, unbreakable tuple tokens (object#relation@subject) must wrap; the canonical
+   <code> element otherwise overflows in narrow columns. Additive — sets nothing else. */
+code { word-break: break-word; }
+
+/* Muted secondary hint under the check tester. */
+.hint--muted { color: var(--ink-3); margin: 16px 0 0; }
+
+/* ---- Relation-tuple table -------------------------------------------------- */
+/* Horizontal-scroll wrapper only (service-specific name so it does NOT pick up the
+   canonical .table-wrap card chrome — the table already sits inside a .card). */
+.tuple-scroll { overflow-x: auto; }
+.t-date { color: var(--ink-3); white-space: nowrap; font-size: 12px; }
+.t-actions { text-align: right; white-space: nowrap; }
+.t-empty { text-align: center; color: var(--ink-3); padding: 36px 16px; }
+.rel { font-weight: 600; color: var(--accent-2); }
+
+/* subject token: neutral by default, accent-tinted for usersets (indirection) */
+.tag {
+  display: inline-flex; align-items: center; font-family: var(--mono);
+  font-size: 11.5px; font-weight: 500; padding: 2px 8px; border-radius: var(--radius-sm);
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--ink);
+}
+.tag--userset { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent-2); }
+
+/* ---- Grid forms (add tuple / read tools) ---------------------------------- */
+.grid-form { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+.grid-form .field:nth-child(3) { grid-column: 1 / -1; }
+.grid-form .actions { grid-column: 1 / -1; }
+.grid-form input[type=text], .save-form input[type=text] { font-family: var(--mono); font-size: 13px; }
+.inline-form { display: inline; margin: 0; }
+
+/* ---- Result panels (check tester / expand / list-objects) ----------------- */
+.result {
+  margin-bottom: 18px; padding: 14px 16px; border-radius: var(--radius-md);
+  border: 1px solid var(--border); background: var(--surface-2);
+}
+.result__head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.result__verdict { font-size: 11px; font-weight: 600; letter-spacing: .06em; padding: 2px 9px; border-radius: var(--radius-sm); }
+.result__query { font-size: 12px; }
+.result--allow { background: var(--ok-soft); border-color: var(--ok-border); }
+.result--allow .result__verdict { background: var(--ok); color: #fff; }
+.result--deny { background: var(--down-soft); border-color: var(--down-border); }
+.result--deny .result__verdict { background: var(--down); color: #fff; }
+.result--info { background: var(--accent-soft); border-color: var(--accent-border); }
+.result__note { margin: 12px 0 8px; font-size: 12px; color: var(--ink-2); font-weight: 600; }
+.result__empty { margin: 8px 0 0; }
+
+/* resolution path: the userset chain that grants (or fails to grant) the check */
+.path { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.path li { font-size: 12px; }
+.path li code { background: var(--surface); }
+
+/* ---- Chips (expand members / list-objects) ------------------------------- */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  display: inline-flex; align-items: center; font-family: var(--mono); font-size: 11.5px;
+  padding: 3px 9px; border-radius: 999px; background: var(--surface);
+  border: 1px solid var(--border-2); color: var(--ink);
+}
+.chip--userset { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent-2); }
+
+/* ---- Bulk import/export + expand tree ------------------------------------- */
+.notice { padding: 12px 16px; border-radius: var(--radius-sm); font-size: 13.5px; border: 1px solid var(--border); background: var(--surface-2); }
+.notice-ok { background: var(--ok-soft); border-color: var(--ok-border); color: var(--ok-ink); }
+.export-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+.import-form textarea { min-height: 132px; font-family: var(--mono); font-size: 12.5px; }
+.import-status { margin: 0 0 16px; }
+.access-tree {
+  list-style: none; margin: 0; padding: 0 0 0 14px;
+  border-left: 1px solid var(--accent-border);
+}
+.access-tree > li { margin: 6px 0; padding-left: 10px; }
+.access-tree > li > .access-tree { margin-top: 6px; }
+.access-tree__token {
+  display: inline-flex; align-items: center; font-family: var(--mono); font-size: 11.5px;
+  padding: 2px 8px; border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px solid var(--border-2); color: var(--ink);
+}
+.access-tree__token--userset {
+  background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent-2);
+}
+
+/* ---- Error page ----------------------------------------------------------- */
+.error-card { max-width: 460px; margin: 60px auto; text-align: center; }
+.error-card__code { font-size: 56px; font-weight: 600; color: var(--accent-2); letter-spacing: -.02em; line-height: 1; }
+.error-card__title { margin: 8px 0; font-size: 22px; }
+.error-card__msg { margin: 0 0 24px; color: var(--ink-2); }

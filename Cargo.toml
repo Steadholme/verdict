@@ -14,6 +14,8 @@ name = "verdict"
 path = "src/main.rs"
 
 [dependencies]
+# Vendored Odyssey canonical CSS (font + tokens + shared components) for server-rendered pages.
+odyssey = { path = "crates/odyssey" }
 # HTTP framework (shared with keystone/inkwell/cellar/sanctum): Form/State/Json extractors,
 # typed responses, server-rendered HTML for the admin console.
 axum = "0.8"

@@ -18,7 +18,7 @@ use serde::Deserialize;
 use crate::audit::AuditEvent;
 use crate::check;
 use crate::error::AppError;
-use crate::handlers::{esc, fmt_date, topbar, APP_CSS};
+use crate::handlers::{app_css, esc, fmt_date, topbar};
 use crate::store::Tuple;
 use crate::tuple_io;
 use crate::{auth, now_nanos, now_secs, AppState};
@@ -106,7 +106,7 @@ pub async fn index(
     let import_result = render_import_result(&q);
 
     let page = CONSOLE_HTML
-        .replace("{{CSS}}", APP_CSS)
+        .replace("{{CSS}}", app_css())
         .replace("{{SHIELD}}", crate::handlers::SHIELD_SVG)
         .replace("{{TOPBAR}}", &topbar("Authorization", &id.email))
         .replace("{{CSRF}}", &esc(&csrf))
