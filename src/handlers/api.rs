@@ -1,4 +1,4 @@
-//! The `/api/*` JSON decision API — the surface every other HOLDFAST service consults.
+//! The `/api/*` JSON decision API — the surface every other Steadholme service consults.
 //!
 //! These are service-to-service endpoints (NOT browser pages), so they render compact JSON
 //! envelopes and JSON errors — never the HTML error page. Authorization is Verdict's OWN

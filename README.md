@@ -1,6 +1,6 @@
-# Verdict — policy decision point (HOLDFAST)
+# Verdict — policy decision point (Steadholme)
 
-Zanzibar-style ReBAC/ABAC authorization for the HOLDFAST estate: relation tuples plus a `check`
+Zanzibar-style ReBAC/ABAC authorization for the Steadholme estate: relation tuples plus a `check`
 API every backend service can consult. v1 implements relation tuples + recursive group/role
 expansion via SQL reads (no external OpenFGA/SpiceDB).
 

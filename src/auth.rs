@@ -6,7 +6,7 @@
 //!    State-changing console POSTs (add / delete a tuple) carry a double-submit CSRF token.
 //!
 //! 2. **`/api/*` decision API — gateway `auth=public`, Verdict's OWN service-token auth.** Other
-//!    HOLDFAST backends call `POST /api/check` over the network; the gateway passes `Authorization`
+//!    Steadholme backends call `POST /api/check` over the network; the gateway passes `Authorization`
 //!    through and Verdict checks it itself: `Authorization: Bearer <VERDICT_SERVICE_TOKEN>`
 //!    (constant-time). When `VERDICT_SERVICE_TOKEN` is empty (dev), `/api/*` auth is DISABLED so the
 //!    DB-free path needs no secret.

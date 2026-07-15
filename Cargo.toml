@@ -2,7 +2,7 @@
 name = "verdict"
 version = "0.1.0"
 edition = "2021"
-description = "Verdict — Zanzibar-style ReBAC/ABAC policy decision point for the HOLDFAST stack (relation tuples + a check API every service can consult)."
+description = "Verdict — Zanzibar-style ReBAC/ABAC policy decision point for the Steadholme stack (relation tuples + a check API every service can consult)."
 license = "MIT OR Apache-2.0"
 
 [lib]

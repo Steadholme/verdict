@@ -1,4 +1,4 @@
-//! Verdict — Zanzibar-style ReBAC/ABAC policy decision point for the HOLDFAST stack.
+//! Verdict — Zanzibar-style ReBAC/ABAC policy decision point for the Steadholme stack.
 //!
 //! Library root: defines [`AppState`], wires the routes via [`app`], and provides
 //! [`build_dev_state`] (in-memory store, no database, audit disabled) and
@@ -10,7 +10,7 @@
 //!   an expand view, and a list-objects view. The gateway injects the verified `X-Auth-*`; Verdict
 //!   trusts it (internal-only). State-changing console POSTs carry a double-submit CSRF token.
 //! - **`/api/*` decision API — `auth=public` at the gateway, Verdict's OWN service-token auth.**
-//!   Other HOLDFAST backends call `POST /api/check` over the network; the gateway passes
+//!   Other Steadholme backends call `POST /api/check` over the network; the gateway passes
 //!   `Authorization` through and Verdict checks `Bearer <VERDICT_SERVICE_TOKEN>` itself.
 //!
 //! Endpoints:
