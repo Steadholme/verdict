@@ -247,9 +247,15 @@ mod tests {
 
     async fn seeded() -> InMemoryStore {
         let s = InMemoryStore::new();
-        s.add_tuple(&t("doc:readme", "viewer", "user:w33d")).await.unwrap();
-        s.add_tuple(&t("group:eng", "member", "user:w33d")).await.unwrap();
-        s.add_tuple(&t("doc:secret", "viewer", "group:eng#member")).await.unwrap();
+        s.add_tuple(&t("doc:readme", "viewer", "user:w33d"))
+            .await
+            .unwrap();
+        s.add_tuple(&t("group:eng", "member", "user:w33d"))
+            .await
+            .unwrap();
+        s.add_tuple(&t("doc:secret", "viewer", "group:eng#member"))
+            .await
+            .unwrap();
         s
     }
 
@@ -287,8 +293,12 @@ mod tests {
     async fn cyclic_group_graph_terminates_and_denies() {
         let s = InMemoryStore::new();
         // group:a member <- group:b#member ; group:b member <- group:a#member (a cycle).
-        s.add_tuple(&t("group:a", "member", "group:b#member")).await.unwrap();
-        s.add_tuple(&t("group:b", "member", "group:a#member")).await.unwrap();
+        s.add_tuple(&t("group:a", "member", "group:b#member"))
+            .await
+            .unwrap();
+        s.add_tuple(&t("group:b", "member", "group:a#member"))
+            .await
+            .unwrap();
         let r = check(&s, "group:a", "member", "user:nobody").await;
         assert!(!r.allowed);
     }

@@ -5,13 +5,14 @@
 //!    `X-Auth-Email`. Verdict is internal-only, so it TRUSTS those headers (no login of its own).
 //!    State-changing console POSTs (add / delete a tuple) carry a double-submit CSRF token.
 //!
-//! 2. **`/api/*` decision API — gateway `auth=public`, Verdict's OWN service-token auth.** Other
-//!    Steadholme backends call `POST /api/check` over the network; the gateway passes `Authorization`
-//!    through and Verdict checks it itself: `Authorization: Bearer <VERDICT_SERVICE_TOKEN>`
-//!    (constant-time). When `VERDICT_SERVICE_TOKEN` is empty (dev), `/api/*` auth is DISABLED so the
-//!    DB-free path needs no secret.
+//! 2. **`/api/*` service APIs — gateway `auth=public`, Verdict's scoped credential auth.** Verdict
+//!    checks `Authorization: Bearer …` in constant time against exactly one of the decision,
+//!    projection, or lifecycle credentials selected by the handler. The all-empty credential state
+//!    is allowed only for the in-memory development path.
 
 use axum::http::{header, HeaderMap};
+
+use crate::config::{ServiceCredentials, ServiceScope};
 
 pub const HEADER_SUBJECT: &str = "x-auth-subject";
 pub const HEADER_EMAIL: &str = "x-auth-email";
@@ -53,16 +54,21 @@ fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
 /// Parse an `Authorization: Bearer <token>` header, returning the token.
 pub fn bearer_token(headers: &HeaderMap) -> Option<String> {
     let raw = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let token = raw.strip_prefix("Bearer ").or_else(|| raw.strip_prefix("bearer "))?;
-    let token = token.trim();
+    let token = raw
+        .strip_prefix("Bearer ")
+        .or_else(|| raw.strip_prefix("bearer "))?;
     (!token.is_empty()).then(|| token.to_string())
 }
 
-/// Authorize an `/api/*` request. When a `VERDICT_SERVICE_TOKEN` is configured, the request must
-/// present a matching `Authorization: Bearer` (constant-time). When no token is configured (dev),
-/// auth is DISABLED and every call is allowed.
-pub fn service_authorized(headers: &HeaderMap, service_token: Option<&str>) -> bool {
-    match service_token.filter(|t| !t.is_empty()) {
+/// Authorize one scoped `/api/*` request. When service credentials are enabled, only the token for
+/// `scope` can pass; a valid token from either other scope is still unauthorized. In the
+/// all-disabled in-memory development state, every scope is allowed.
+pub fn service_authorized(
+    headers: &HeaderMap,
+    credentials: &ServiceCredentials,
+    scope: ServiceScope,
+) -> bool {
+    match credentials.token(scope) {
         None => true, // auth disabled (dev / DB-free)
         Some(cfg) => match bearer_token(headers) {
             Some(presented) => ct_eq(presented.as_bytes(), cfg.as_bytes()),
@@ -71,16 +77,10 @@ pub fn service_authorized(headers: &HeaderMap, service_token: Option<&str>) -> b
     }
 }
 
-/// A short, redacted label for the `/api/*` caller, used as the audit actor. Never the token.
-pub fn api_actor(headers: &HeaderMap) -> String {
-    if header_value(headers, HEADER_SUBJECT).is_some() {
-        // An admin exercising the API through the SSO console proxy.
-        identity(headers).email
-    } else if bearer_token(headers).is_some() {
-        "service-token".to_string()
-    } else {
-        "anonymous".to_string()
-    }
+/// A short, redacted label for a service caller, used as the audit actor. It records only the
+/// authorized scope and never derives any actor value from the presented credential.
+pub const fn api_actor(scope: ServiceScope) -> &'static str {
+    scope.actor_label()
 }
 
 // ---------------------------------------------------------------------------
@@ -176,30 +176,78 @@ mod tests {
 
     #[test]
     fn service_auth_disabled_when_no_token() {
-        assert!(service_authorized(&HeaderMap::new(), None));
-        assert!(service_authorized(&HeaderMap::new(), Some("")));
+        let credentials = ServiceCredentials::disabled();
+        for scope in [
+            ServiceScope::Decision,
+            ServiceScope::Projection,
+            ServiceScope::Lifecycle,
+        ] {
+            assert!(service_authorized(&HeaderMap::new(), &credentials, scope));
+        }
     }
 
     #[test]
-    fn service_auth_requires_matching_bearer() {
-        let cfg = Some("s3cr3t");
+    fn service_auth_requires_the_matching_scoped_bearer() {
+        const DECISION: &str = "decision-token-00000000000000000001";
+        const PROJECTION: &str = "projection-token-000000000000000001";
+        const LIFECYCLE: &str = "lifecycle-token-0000000000000000001";
+        let credentials = ServiceCredentials::try_new(DECISION, PROJECTION, LIFECYCLE).unwrap();
         // No header -> denied.
-        assert!(!service_authorized(&HeaderMap::new(), cfg));
+        assert!(!service_authorized(
+            &HeaderMap::new(),
+            &credentials,
+            ServiceScope::Decision
+        ));
         // Wrong bearer -> denied.
         let mut bad = HeaderMap::new();
-        bad.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer nope"));
-        assert!(!service_authorized(&bad, cfg));
+        bad.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer nope"),
+        );
+        assert!(!service_authorized(
+            &bad,
+            &credentials,
+            ServiceScope::Decision
+        ));
         // Right bearer -> allowed.
         let mut good = HeaderMap::new();
-        good.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer s3cr3t"));
-        assert!(service_authorized(&good, cfg));
+        good.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer decision-token-00000000000000000001"),
+        );
+        assert!(service_authorized(
+            &good,
+            &credentials,
+            ServiceScope::Decision
+        ));
+        // A valid credential from another scope is still denied.
+        let mut wrong_scope = HeaderMap::new();
+        wrong_scope.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer projection-token-000000000000000001"),
+        );
+        assert!(!service_authorized(
+            &wrong_scope,
+            &credentials,
+            ServiceScope::Decision
+        ));
+    }
+
+    #[test]
+    fn service_actor_contains_only_scope_label() {
+        assert_eq!(api_actor(ServiceScope::Decision), "service:decision");
+        assert_eq!(api_actor(ServiceScope::Projection), "service:projection");
+        assert_eq!(api_actor(ServiceScope::Lifecycle), "service:lifecycle");
     }
 
     #[test]
     fn csrf_double_submit() {
         let token = new_csrf_token();
         let mut h = HeaderMap::new();
-        h.insert(header::COOKIE, format!("{CSRF_COOKIE}={token}").parse().unwrap());
+        h.insert(
+            header::COOKIE,
+            format!("{CSRF_COOKIE}={token}").parse().unwrap(),
+        );
         assert!(verify_csrf(&h, &token));
         assert!(!verify_csrf(&h, "nope"));
         assert!(!verify_csrf(&HeaderMap::new(), &token));
@@ -209,7 +257,10 @@ mod tests {
     fn ensure_csrf_reuses_existing_cookie() {
         let token = new_csrf_token();
         let mut h = HeaderMap::new();
-        h.insert(header::COOKIE, format!("{CSRF_COOKIE}={token}").parse().unwrap());
+        h.insert(
+            header::COOKIE,
+            format!("{CSRF_COOKIE}={token}").parse().unwrap(),
+        );
         let (t, set) = ensure_csrf(&h);
         assert_eq!(t, token);
         assert!(set.is_none());

@@ -29,6 +29,9 @@ async-trait = "0.1"
 # Deserialize the HTML form bodies + the `/api/*` JSON request/response envelopes.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+ipnet = "2"
 # Ergonomic error/store enums -> JSON error envelope / branded HTML error page.
 thiserror = "2"
 # Structured logging.
@@ -43,7 +46,7 @@ rand = "0.8"
 # Portable PostgreSQL data layer. Runtime queries only (sqlx::query/Row) — NO compile-time
 # macros, so the build needs NO database. rustls TLS (ring) — no openssl. The same standard SQL
 # later runs unchanged on FusionDB over pgwire.
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "json"] }
 
 [dev-dependencies]
 # ServiceExt::oneshot drives the Router in-process for the end-to-end tests (no port bind).

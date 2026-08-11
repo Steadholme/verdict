@@ -1,10 +1,9 @@
 //! The `/api/*` JSON decision API — the surface every other Steadholme service consults.
 //!
 //! These are service-to-service endpoints (NOT browser pages), so they render compact JSON
-//! envelopes and JSON errors — never the HTML error page. Authorization is Verdict's OWN
-//! service-token check (`Authorization: Bearer <VERDICT_SERVICE_TOKEN>`): the gateway routes
-//! `authz.w33d.xyz/api/` as `auth=public` and passes `Authorization` through, so callers reach the
-//! decision point directly on the `holdfast` network.
+//! envelopes and JSON errors — never the HTML error page. Authorization uses separate decision and
+//! projection credentials selected explicitly by each handler. The gateway routes
+//! `authz.w33d.xyz/api/` as `auth=public` and passes `Authorization` through.
 //!
 //! Endpoints:
 //! - `POST /api/check`         `{object, relation, subject}` -> `{allowed, via}`
@@ -24,6 +23,7 @@ use serde_json::{json, Value};
 
 use crate::audit::AuditEvent;
 use crate::check;
+use crate::config::ServiceScope;
 use crate::store::Tuple;
 use crate::tuple_io;
 use crate::{auth, now_nanos, now_secs, AppState};
@@ -79,7 +79,7 @@ pub async fn check_handler(
     headers: HeaderMap,
     Json(req): Json<TripleReq>,
 ) -> Response {
-    if let Some(resp) = guard(&state, &headers) {
+    if let Some(resp) = guard(&state, &headers, ServiceScope::Decision) {
         return resp;
     }
     let (object, relation, subject) = match triple(&req) {
@@ -88,7 +88,7 @@ pub async fn check_handler(
     };
 
     let outcome = check::check(state.store.as_ref(), &object, &relation, &subject).await;
-    audit_check_decision(&state, &headers, &object, &relation, &subject, &outcome);
+    audit_check_decision(&state, &object, &relation, &subject, &outcome);
     (
         StatusCode::OK,
         Json(CheckResp {
@@ -105,7 +105,7 @@ pub async fn write_tuple(
     headers: HeaderMap,
     Json(req): Json<TripleReq>,
 ) -> Response {
-    if let Some(resp) = guard(&state, &headers) {
+    if let Some(resp) = guard(&state, &headers, ServiceScope::Projection) {
         return resp;
     }
     let (object, relation, subject) = match triple(&req) {
@@ -125,12 +125,16 @@ pub async fn write_tuple(
             if written {
                 state.audit.emit(AuditEvent::info(
                     "verdict.tuple.write",
-                    &auth::api_actor(&headers),
+                    auth::api_actor(ServiceScope::Projection),
                     &check::tuple_label(&object, &relation, &subject),
                     "added",
                 ));
             }
-            (StatusCode::OK, Json(json!({ "ok": true, "written": written }))).into_response()
+            (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "written": written })),
+            )
+                .into_response()
         }
         Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
@@ -142,7 +146,7 @@ pub async fn delete_tuple(
     headers: HeaderMap,
     Json(req): Json<TripleReq>,
 ) -> Response {
-    if let Some(resp) = guard(&state, &headers) {
+    if let Some(resp) = guard(&state, &headers, ServiceScope::Projection) {
         return resp;
     }
     let (object, relation, subject) = match triple(&req) {
@@ -155,12 +159,16 @@ pub async fn delete_tuple(
             if deleted {
                 state.audit.emit(AuditEvent::warning(
                     "verdict.tuple.write",
-                    &auth::api_actor(&headers),
+                    auth::api_actor(ServiceScope::Projection),
                     &check::tuple_label(&object, &relation, &subject),
                     "deleted",
                 ));
             }
-            (StatusCode::OK, Json(json!({ "ok": true, "deleted": deleted }))).into_response()
+            (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "deleted": deleted })),
+            )
+                .into_response()
         }
         Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
@@ -173,7 +181,7 @@ pub async fn import_tuples(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
-    if let Some(resp) = guard(&state, &headers) {
+    if let Some(resp) = guard(&state, &headers, ServiceScope::Projection) {
         return resp;
     }
 
@@ -185,7 +193,7 @@ pub async fn import_tuples(
         Ok(report) => {
             state.audit.emit(AuditEvent::info(
                 "verdict.tuple.import",
-                &auth::api_actor(&headers),
+                auth::api_actor(ServiceScope::Projection),
                 "tuples",
                 &format!(
                     "imported {} tuple(s); {} duplicate/existing",
@@ -204,7 +212,7 @@ pub async fn export_tuples(
     headers: HeaderMap,
     Json(req): Json<ExportReq>,
 ) -> Response {
-    if let Some(resp) = guard(&state, &headers) {
+    if let Some(resp) = guard(&state, &headers, ServiceScope::Projection) {
         return resp;
     }
 
@@ -240,7 +248,7 @@ pub async fn list_objects(
     headers: HeaderMap,
     Json(req): Json<ListObjectsReq>,
 ) -> Response {
-    if let Some(resp) = guard(&state, &headers) {
+    if let Some(resp) = guard(&state, &headers, ServiceScope::Decision) {
         return resp;
     }
     let relation = req.relation.trim();
@@ -258,7 +266,7 @@ pub async fn expand(
     headers: HeaderMap,
     Json(req): Json<ExpandReq>,
 ) -> Response {
-    if let Some(resp) = guard(&state, &headers) {
+    if let Some(resp) = guard(&state, &headers, ServiceScope::Decision) {
         return resp;
     }
     let object = req.object.trim();
@@ -278,37 +286,43 @@ pub async fn expand(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Service-token gate. Returns `Some(401)` when the call is not authorized, `None` when it may
-/// proceed.
-fn guard(state: &AppState, headers: &HeaderMap) -> Option<Response> {
-    if auth::service_authorized(headers, state.config.service_token.as_deref()) {
+/// Scope-specific service credential gate. Returns `Some(401)` when the call is not authorized,
+/// `None` when it may proceed.
+pub(crate) fn guard(
+    state: &AppState,
+    headers: &HeaderMap,
+    scope: ServiceScope,
+) -> Option<Response> {
+    if auth::service_authorized(headers, &state.config.service_credentials, scope) {
         None
     } else {
-        Some(json_err(StatusCode::UNAUTHORIZED, "missing or invalid service token"))
+        Some(json_err(
+            StatusCode::UNAUTHORIZED,
+            "missing or invalid service token",
+        ))
     }
 }
 
 fn audit_check_decision(
     state: &AppState,
-    headers: &HeaderMap,
     object: &str,
     relation: &str,
     subject: &str,
     outcome: &check::CheckOutcome,
 ) {
-    let actor = auth::api_actor(headers);
+    let actor = auth::api_actor(ServiceScope::Decision);
     let target = check::tuple_label(object, relation, subject);
     if outcome.allowed {
         state.audit.emit(AuditEvent::info(
             "verdict.check.allow",
-            &actor,
+            actor,
             &target,
             &format!("allowed via {} step(s)", outcome.via.len()),
         ));
     } else {
         state.audit.emit(AuditEvent::notice(
             "verdict.check.deny",
-            &actor,
+            actor,
             &target,
             "no grant path",
         ));
@@ -336,12 +350,20 @@ fn triple(req: &TripleReq) -> Result<(String, String, String), String> {
     if object.is_empty() || relation.is_empty() || subject.is_empty() {
         return Err("object, relation and subject are required".to_string());
     }
-    for (label, v) in [("object", object), ("relation", relation), ("subject", subject)] {
+    for (label, v) in [
+        ("object", object),
+        ("relation", relation),
+        ("subject", subject),
+    ] {
         if v.split_whitespace().count() != 1 {
             return Err(format!("{label} must not contain whitespace"));
         }
     }
-    Ok((object.to_string(), relation.to_string(), subject.to_string()))
+    Ok((
+        object.to_string(),
+        relation.to_string(),
+        subject.to_string(),
+    ))
 }
 
 /// A compact JSON error envelope: `{ "error": "..." }`. 401s carry `WWW-Authenticate: Bearer`.

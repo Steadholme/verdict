@@ -23,21 +23,27 @@ depth ceiling). The resolution path is returned so callers can see *how* a grant
   expand view (who holds a relation), and a list-objects view (what a subject can do). The gateway
   injects the verified `X-Auth-*`; Verdict trusts it (internal-only). Console POSTs carry a
   double-submit `__Host-csrf` token.
-- **`/api/*` decision API — gateway `auth=public`, Verdict's OWN service-token auth.** Other
-  backends call it over the network; the gateway passes `Authorization` through and Verdict checks
-  `Bearer <VERDICT_SERVICE_TOKEN>` itself.
+- **`/api/*` service APIs — gateway `auth=public`, Verdict's scoped credential auth.** The gateway
+  passes `Authorization` through and each handler accepts exactly one independent credential:
+  decision, desired-state projection, or JML lifecycle. A credential valid for one scope is `401`
+  on every endpoint in the other two scopes.
 
-| Method + path             | Auth   | Body / result |
-|---------------------------|--------|---------------|
-| `GET  /healthz`           | none   | `200 ok` |
-| `GET  /`                  | sso    | console HTML |
-| `POST /`                  | sso    | add tuple (CSRF) |
-| `POST /delete`            | sso    | delete tuple (CSRF) |
-| `POST /api/check`         | bearer | `{object,relation,subject}` → `{allowed,via}` |
-| `POST /api/tuples`        | bearer | write a tuple → `{ok,written}` |
-| `POST /api/tuples/delete` | bearer | delete a tuple → `{ok,deleted}` |
-| `POST /api/list-objects`  | bearer | `{relation,subject}` → `{objects}` |
-| `POST /api/expand`        | bearer | `{object,relation}` → `{direct,members}` |
+| Method + path | Auth scope | Body / result |
+|---|---|---|
+| `GET  /healthz` | none | `200 ok` |
+| `GET  /` | SSO | console HTML |
+| `POST /` | SSO | add tuple (CSRF) |
+| `POST /delete` | SSO | delete tuple (CSRF) |
+| `POST /api/check` | decision | `{object,relation,subject}` → `{allowed,via}` |
+| `POST /api/v2/check` | decision | typed permission/resource/context decision with epoch + evidence |
+| `POST /api/list-objects` | decision | `{relation,subject}` → `{objects}` |
+| `POST /api/expand` | decision | `{object,relation}` → `{direct,members}` |
+| `POST /api/v2/projections` | projection | fenced desired-state replacement for one Access Governance grant |
+| `POST /api/tuples` | projection | legacy tuple write → `{ok,written}` |
+| `POST /api/tuples/delete` | projection | legacy tuple delete → `{ok,deleted}` |
+| `POST /api/tuples/import` | projection | legacy tuple bulk import |
+| `POST /api/tuples/export` | projection | legacy tuple export |
+| `POST /api/v2/subject-status` | lifecycle | fenced JML `active`/`frozen`/`terminated` state for one exact `user:` subject |
 
 ## Configuration (zero-config by default)
 
@@ -46,14 +52,38 @@ depth ceiling). The resolution path is returned so callers can see *how* a grant
 | `BIND_ADDR` | `0.0.0.0:9140` | listen address |
 | `VERDICT_STORE` | `memory` | `memory` \| `postgres` |
 | `DATABASE_URL` | — | required when `VERDICT_STORE=postgres` (db `verdict`) |
-| `VERDICT_SERVICE_TOKEN` | — | enforced `/api/*` bearer; empty disables `/api/*` auth (dev) |
+| `VERDICT_DECISION_TOKEN` | — | Bearer for decision/read endpoints only |
+| `VERDICT_PROJECTION_TOKEN` | — | Bearer for desired-state projection and legacy tuple administration only |
+| `VERDICT_LIFECYCLE_TOKEN` | — | Bearer for JML subject lifecycle only |
 | `AUDIT_ENABLED` | `false` | enable the Watchtower audit emitter |
 | `WATCHTOWER_URL` | — | e.g. `http://watchtower:8500` |
 | `AUDIT_INGEST_TOKEN` | — | bearer for Watchtower ingest |
 
+The three service tokens must each contain 32–512 visible ASCII bytes and must be pairwise
+distinct. `VERDICT_STORE=postgres` fails startup unless all three are valid. The memory store may
+run without service authentication only when all three variables are empty; partial configuration
+always fails startup. `VERDICT_SERVICE_TOKEN` is retired and is never a fallback master token: a
+non-empty legacy variable causes an explicit startup error.
+
+Client integration is intentionally narrow:
+
+- PDP/PEP decision clients use `VERDICT_DECISION_TOKEN`.
+- Access Governance's projection worker uses `VERDICT_PROJECTION_TOKEN`.
+- Access Governance's JML consequence worker uses `VERDICT_LIFECYCLE_TOKEN`.
+- Any retained legacy tuple administration client uses `VERDICT_PROJECTION_TOKEN`.
+
+Every client sends its credential as `Authorization: Bearer <token>`. Generate three independent
+random values; do not reuse or derive one from another. Audit actors contain only the redacted
+scope labels `service:decision`, `service:projection`, or `service:lifecycle`.
+
 On an empty store the documented example tuple set is seeded so the console tester demonstrates
-indirection on first run. Audit events: `verdict.tuple.write` (writes/deletes) and
+indirection on first run. Audit events include `verdict.tuple.write` (writes/deletes) and
 `verdict.check.deny` (a denied `/api/check`).
+
+The v2 evaluator applies subject status before any permission edge. `frozen` and
+`terminated` therefore deny every permission at the central PDP, including permissions
+added after the JML event. Replays with the same `source_version` and payload are epoch-stable;
+older or conflicting updates return `409`.
 
 ## Build / test
 

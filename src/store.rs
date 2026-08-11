@@ -97,7 +97,11 @@ impl Store for InMemoryStore {
         let tuples = self.tuples.lock().expect("tuples lock poisoned");
         let mut v: Vec<Tuple> = tuples.clone();
         // Newest-first; ties broken by id so output is stable.
-        v.sort_by(|a, b| b.created_at.cmp(&a.created_at).then_with(|| b.id.cmp(&a.id)));
+        v.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| b.id.cmp(&a.id))
+        });
         v.truncate(LIST_LIMIT);
         v
     }
@@ -105,7 +109,11 @@ impl Store for InMemoryStore {
     async fn all_tuples(&self) -> Vec<Tuple> {
         let tuples = self.tuples.lock().expect("tuples lock poisoned");
         let mut v: Vec<Tuple> = tuples.clone();
-        v.sort_by(|a, b| b.created_at.cmp(&a.created_at).then_with(|| b.id.cmp(&a.id)));
+        v.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| b.id.cmp(&a.id))
+        });
         v
     }
 
@@ -133,10 +141,9 @@ impl Store for InMemoryStore {
 
     async fn add_tuple(&self, tuple: &Tuple) -> Result<bool, StoreError> {
         let mut tuples = self.tuples.lock().expect("tuples lock poisoned");
-        if tuples
-            .iter()
-            .any(|t| t.object == tuple.object && t.relation == tuple.relation && t.subject == tuple.subject)
-        {
+        if tuples.iter().any(|t| {
+            t.object == tuple.object && t.relation == tuple.relation && t.subject == tuple.subject
+        }) {
             return Ok(false);
         }
         tuples.push(tuple.clone());
@@ -249,23 +256,23 @@ impl PgStore {
         object: &str,
         relation: &str,
     ) -> Result<Vec<String>, sqlx::Error> {
-        let rows = sqlx::query(
-            "SELECT subject FROM tuples WHERE object = $1 AND relation = $2",
-        )
-        .bind(object)
-        .bind(relation)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = sqlx::query("SELECT subject FROM tuples WHERE object = $1 AND relation = $2")
+            .bind(object)
+            .bind(relation)
+            .fetch_all(&self.pool)
+            .await?;
         rows.iter().map(|r| r.try_get("subject")).collect()
     }
 
-    async fn objects_with_relation_async(&self, relation: &str) -> Result<Vec<String>, sqlx::Error> {
-        let rows = sqlx::query(
-            "SELECT DISTINCT object FROM tuples WHERE relation = $1 ORDER BY object",
-        )
-        .bind(relation)
-        .fetch_all(&self.pool)
-        .await?;
+    async fn objects_with_relation_async(
+        &self,
+        relation: &str,
+    ) -> Result<Vec<String>, sqlx::Error> {
+        let rows =
+            sqlx::query("SELECT DISTINCT object FROM tuples WHERE relation = $1 ORDER BY object")
+                .bind(relation)
+                .fetch_all(&self.pool)
+                .await?;
         rows.iter().map(|r| r.try_get("object")).collect()
     }
 
@@ -291,14 +298,13 @@ impl PgStore {
         relation: &str,
         subject: &str,
     ) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
-            "DELETE FROM tuples WHERE object = $1 AND relation = $2 AND subject = $3",
-        )
-        .bind(object)
-        .bind(relation)
-        .bind(subject)
-        .execute(&self.pool)
-        .await?;
+        let result =
+            sqlx::query("DELETE FROM tuples WHERE object = $1 AND relation = $2 AND subject = $3")
+                .bind(object)
+                .bind(relation)
+                .bind(subject)
+                .execute(&self.pool)
+                .await?;
         Ok(result.rows_affected() > 0)
     }
 }
@@ -372,9 +378,15 @@ mod tests {
     #[tokio::test]
     async fn add_is_idempotent_on_triple() {
         let s = InMemoryStore::new();
-        assert!(s.add_tuple(&tup("doc:a", "viewer", "user:w33d")).await.unwrap());
+        assert!(s
+            .add_tuple(&tup("doc:a", "viewer", "user:w33d"))
+            .await
+            .unwrap());
         // Same triple again -> not newly inserted.
-        assert!(!s.add_tuple(&tup("doc:a", "viewer", "user:w33d")).await.unwrap());
+        assert!(!s
+            .add_tuple(&tup("doc:a", "viewer", "user:w33d"))
+            .await
+            .unwrap());
         assert_eq!(s.list_tuples().await.len(), 1);
         assert_eq!(s.all_tuples().await.len(), 1);
     }
@@ -382,9 +394,15 @@ mod tests {
     #[tokio::test]
     async fn reverse_reads_filter_correctly() {
         let s = InMemoryStore::new();
-        s.add_tuple(&tup("doc:a", "viewer", "user:w33d")).await.unwrap();
-        s.add_tuple(&tup("doc:a", "viewer", "group:eng#member")).await.unwrap();
-        s.add_tuple(&tup("doc:b", "editor", "user:zed")).await.unwrap();
+        s.add_tuple(&tup("doc:a", "viewer", "user:w33d"))
+            .await
+            .unwrap();
+        s.add_tuple(&tup("doc:a", "viewer", "group:eng#member"))
+            .await
+            .unwrap();
+        s.add_tuple(&tup("doc:b", "editor", "user:zed"))
+            .await
+            .unwrap();
 
         let mut subs = s.subjects_for("doc:a", "viewer").await;
         subs.sort();
@@ -397,8 +415,16 @@ mod tests {
     #[tokio::test]
     async fn delete_reports_whether_removed() {
         let s = InMemoryStore::new();
-        s.add_tuple(&tup("doc:a", "viewer", "user:w33d")).await.unwrap();
-        assert!(s.delete_tuple("doc:a", "viewer", "user:w33d").await.unwrap());
-        assert!(!s.delete_tuple("doc:a", "viewer", "user:w33d").await.unwrap());
+        s.add_tuple(&tup("doc:a", "viewer", "user:w33d"))
+            .await
+            .unwrap();
+        assert!(s
+            .delete_tuple("doc:a", "viewer", "user:w33d")
+            .await
+            .unwrap());
+        assert!(!s
+            .delete_tuple("doc:a", "viewer", "user:w33d")
+            .await
+            .unwrap());
     }
 }

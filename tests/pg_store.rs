@@ -35,7 +35,9 @@ async fn pg_store_full_integration() {
     };
 
     // --- connect / migrate (idempotent: run twice) -------------------------
-    let pg = PgStore::connect(&url).await.expect("connect TEST_DATABASE_URL");
+    let pg = PgStore::connect(&url)
+        .await
+        .expect("connect TEST_DATABASE_URL");
     pg.migrate().await.expect("migrate");
     pg.migrate().await.expect("migrate is idempotent");
     let pg = Arc::new(pg);
@@ -59,18 +61,31 @@ async fn pg_store_full_integration() {
         subject: s.to_string(),
         created_at: now,
     };
-    assert!(pg.add_tuple(&t("pg_1", "doc:readme", "viewer", "user:w33d")).await.unwrap());
+    assert!(pg
+        .add_tuple(&t("pg_1", "doc:readme", "viewer", "user:w33d"))
+        .await
+        .unwrap());
     // ON CONFLICT DO NOTHING -> second insert of the same triple is not "written".
-    assert!(!pg.add_tuple(&t("pg_1b", "doc:readme", "viewer", "user:w33d")).await.unwrap());
+    assert!(!pg
+        .add_tuple(&t("pg_1b", "doc:readme", "viewer", "user:w33d"))
+        .await
+        .unwrap());
 
-    pg.add_tuple(&t("pg_2", "group:eng", "member", "user:w33d")).await.unwrap();
-    pg.add_tuple(&t("pg_3", "doc:secret", "viewer", "group:eng#member")).await.unwrap();
+    pg.add_tuple(&t("pg_2", "group:eng", "member", "user:w33d"))
+        .await
+        .unwrap();
+    pg.add_tuple(&t("pg_3", "doc:secret", "viewer", "group:eng#member"))
+        .await
+        .unwrap();
 
     // Reverse reads back the indexed columns.
     let mut subs = pg.subjects_for("doc:secret", "viewer").await;
     subs.sort();
     assert_eq!(subs, vec!["group:eng#member"]);
-    assert!(pg.objects_with_relation("viewer").await.contains(&"doc:secret".to_string()));
+    assert!(pg
+        .objects_with_relation("viewer")
+        .await
+        .contains(&"doc:secret".to_string()));
     assert!(pg
         .all_tuples()
         .await
@@ -81,10 +96,16 @@ async fn pg_store_full_integration() {
     let direct = check::check(pg.as_ref(), "doc:readme", "viewer", "user:w33d").await;
     assert!(direct.allowed);
     let indirect = check::check(pg.as_ref(), "doc:secret", "viewer", "user:w33d").await;
-    assert!(indirect.allowed, "userset indirection resolves over Postgres");
+    assert!(
+        indirect.allowed,
+        "userset indirection resolves over Postgres"
+    );
     assert_eq!(
         indirect.via,
-        vec!["doc:secret#viewer@group:eng#member", "group:eng#member@user:w33d"]
+        vec![
+            "doc:secret#viewer@group:eng#member",
+            "group:eng#member@user:w33d"
+        ]
     );
 
     // --- full HTTP flow through the PG-backed app --------------------------
@@ -120,12 +141,19 @@ async fn pg_store_full_integration() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(pg.subjects_for("doc:secret", "viewer").await.is_empty(), "deleted in pg");
+    assert!(
+        pg.subjects_for("doc:secret", "viewer").await.is_empty(),
+        "deleted in pg"
+    );
 
     // --- seeding is idempotent (store already non-empty -> no-op) ----------
     let before = pg.list_tuples().await.len();
     seed_examples(pg.as_ref()).await;
-    assert_eq!(pg.list_tuples().await.len(), before, "seed is a no-op on a non-empty store");
+    assert_eq!(
+        pg.list_tuples().await.len(),
+        before,
+        "seed is a no-op on a non-empty store"
+    );
 
     println!(
         "PG STORE INTEGRATION OK: migrate (idempotent) + add/conflict/reverse-read + check engine \

@@ -248,7 +248,12 @@ mod tests {
     fn disabled_sink_is_noop_and_never_drops() {
         let sink = AuditSink::disabled();
         for _ in 0..1000 {
-            sink.emit(AuditEvent::notice("verdict.check.deny", "svc", "doc:x#viewer", "no"));
+            sink.emit(AuditEvent::notice(
+                "verdict.check.deny",
+                "svc",
+                "doc:x#viewer",
+                "no",
+            ));
         }
         assert_eq!(sink.dropped(), 0);
     }
@@ -272,7 +277,12 @@ mod tests {
 
     #[test]
     fn event_serializes_to_safe_fields() {
-        let ev = AuditEvent::info("verdict.tuple.write", "alice@w33d.xyz", "doc:readme#viewer@user:w33d", "added");
+        let ev = AuditEvent::info(
+            "verdict.tuple.write",
+            "alice@w33d.xyz",
+            "doc:readme#viewer@user:w33d",
+            "added",
+        );
         let json = serde_json::to_string(&ev).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let mut keys: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
@@ -289,7 +299,12 @@ mod tests {
     async fn emit_never_blocks_when_sink_unreachable() {
         let sink = AuditSink::start(true, "http://127.0.0.1:1/", Some("token"));
         for _ in 0..(QUEUE_CAPACITY * 8) {
-            sink.emit(AuditEvent::notice("verdict.check.deny", "u", "doc:x#viewer", "no"));
+            sink.emit(AuditEvent::notice(
+                "verdict.check.deny",
+                "u",
+                "doc:x#viewer",
+                "no",
+            ));
         }
         assert!(
             sink.dropped() > 0,

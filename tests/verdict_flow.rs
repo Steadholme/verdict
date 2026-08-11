@@ -13,21 +13,26 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use verdict::audit::AuditSink;
-use verdict::config::Config;
+use verdict::config::{Config, ServiceCredentials};
+use verdict::policy_store::InMemoryPolicyStore;
 use verdict::store::InMemoryStore;
 use verdict::{app, seed_examples, AppState};
 
-const SERVICE_TOKEN: &str = "verdict-test-token";
+const DECISION_TOKEN: &str = "decision-token-00000000000000000001";
+const PROJECTION_TOKEN: &str = "projection-token-000000000000000001";
+const LIFECYCLE_TOKEN: &str = "lifecycle-token-0000000000000000001";
 
 /// State with the service token enforced + the example tuple set seeded.
 async fn seeded_state() -> AppState {
     let mut config = Config::dev();
-    config.service_token = Some(SERVICE_TOKEN.to_string());
+    config.service_credentials =
+        ServiceCredentials::try_new(DECISION_TOKEN, PROJECTION_TOKEN, LIFECYCLE_TOKEN).unwrap();
     let store = Arc::new(InMemoryStore::new());
     seed_examples(store.as_ref()).await;
     AppState {
         config: Arc::new(config),
         store,
+        policy: Arc::new(InMemoryPolicyStore::new()),
         audit: AuditSink::disabled(),
     }
 }
@@ -78,7 +83,7 @@ async fn api_check_direct_grant_allowed() {
     let (status, body) = call(
         &state,
         api_post(
-            Some(SERVICE_TOKEN),
+            Some(DECISION_TOKEN),
             "/api/check",
             json!({"object": "doc:readme", "relation": "viewer", "subject": "user:w33d"}),
         ),
@@ -96,7 +101,7 @@ async fn api_check_indirection_allowed_with_path() {
     let (status, body) = call(
         &state,
         api_post(
-            Some(SERVICE_TOKEN),
+            Some(DECISION_TOKEN),
             "/api/check",
             json!({"object": "doc:secret", "relation": "viewer", "subject": "user:w33d"}),
         ),
@@ -115,7 +120,7 @@ async fn api_check_unrelated_subject_denied() {
     let (status, body) = call(
         &state,
         api_post(
-            Some(SERVICE_TOKEN),
+            Some(DECISION_TOKEN),
             "/api/check",
             json!({"object": "doc:secret", "relation": "viewer", "subject": "user:intruder"}),
         ),
@@ -163,7 +168,7 @@ async fn api_write_then_check_then_delete() {
     let (status, body) = call(
         &state,
         api_post(
-            Some(SERVICE_TOKEN),
+            Some(PROJECTION_TOKEN),
             "/api/tuples",
             json!({"object": "doc:roadmap", "relation": "editor", "subject": "user:zed"}),
         ),
@@ -176,7 +181,7 @@ async fn api_write_then_check_then_delete() {
     let (_, body) = call(
         &state,
         api_post(
-            Some(SERVICE_TOKEN),
+            Some(PROJECTION_TOKEN),
             "/api/tuples",
             json!({"object": "doc:roadmap", "relation": "editor", "subject": "user:zed"}),
         ),
@@ -188,7 +193,7 @@ async fn api_write_then_check_then_delete() {
     let (_, body) = call(
         &state,
         api_post(
-            Some(SERVICE_TOKEN),
+            Some(DECISION_TOKEN),
             "/api/check",
             json!({"object": "doc:roadmap", "relation": "editor", "subject": "user:zed"}),
         ),
@@ -200,7 +205,7 @@ async fn api_write_then_check_then_delete() {
     let (_, body) = call(
         &state,
         api_post(
-            Some(SERVICE_TOKEN),
+            Some(PROJECTION_TOKEN),
             "/api/tuples/delete",
             json!({"object": "doc:roadmap", "relation": "editor", "subject": "user:zed"}),
         ),
@@ -212,7 +217,7 @@ async fn api_write_then_check_then_delete() {
     let (_, body) = call(
         &state,
         api_post(
-            Some(SERVICE_TOKEN),
+            Some(DECISION_TOKEN),
             "/api/check",
             json!({"object": "doc:roadmap", "relation": "editor", "subject": "user:zed"}),
         ),
@@ -228,7 +233,7 @@ async fn api_list_objects_and_expand() {
     let (_, body) = call(
         &state,
         api_post(
-            Some(SERVICE_TOKEN),
+            Some(DECISION_TOKEN),
             "/api/list-objects",
             json!({"relation": "viewer", "subject": "user:w33d"}),
         ),
@@ -244,7 +249,7 @@ async fn api_list_objects_and_expand() {
     let (_, body) = call(
         &state,
         api_post(
-            Some(SERVICE_TOKEN),
+            Some(DECISION_TOKEN),
             "/api/expand",
             json!({"object": "doc:secret", "relation": "viewer"}),
         ),
@@ -264,7 +269,7 @@ async fn api_rejects_invalid_triple() {
     let (status, _) = call(
         &state,
         api_post(
-            Some(SERVICE_TOKEN),
+            Some(DECISION_TOKEN),
             "/api/check",
             json!({"object": "", "relation": "viewer", "subject": "user:w33d"}),
         ),
@@ -280,7 +285,7 @@ async fn api_imports_and_exports_tuples_as_json_and_csv() {
     let (status, body) = call(
         &state,
         api_post(
-            Some(SERVICE_TOKEN),
+            Some(PROJECTION_TOKEN),
             "/api/tuples/import",
             json!({"tuples":[{"object":"doc:bulk","relation":"viewer","subject":"user:bulk"}]}),
         ),
@@ -300,7 +305,7 @@ async fn api_imports_and_exports_tuples_as_json_and_csv() {
     let (_, body) = call(
         &state,
         api_post(
-            Some(SERVICE_TOKEN),
+            Some(PROJECTION_TOKEN),
             "/api/tuples/import",
             json!({"format":"csv","content":"object,relation,subject\ndoc:csv,viewer,user:csv\n"}),
         ),
@@ -311,7 +316,7 @@ async fn api_imports_and_exports_tuples_as_json_and_csv() {
     let (status, body) = call(
         &state,
         api_post(
-            Some(SERVICE_TOKEN),
+            Some(PROJECTION_TOKEN),
             "/api/tuples/export",
             json!({"format":"json"}),
         ),
@@ -328,7 +333,7 @@ async fn api_imports_and_exports_tuples_as_json_and_csv() {
     let (status, body) = call(
         &state,
         api_post(
-            Some(SERVICE_TOKEN),
+            Some(PROJECTION_TOKEN),
             "/api/tuples/export",
             json!({"format":"csv"}),
         ),
@@ -342,7 +347,7 @@ async fn api_imports_and_exports_tuples_as_json_and_csv() {
     let (status, _) = call(
         &state,
         api_post(
-            Some(SERVICE_TOKEN),
+            Some(PROJECTION_TOKEN),
             "/api/tuples/import",
             json!({"tuples":[{"object":"doc:bad","relation":"view er","subject":"user:bad"}]}),
         ),
@@ -589,6 +594,7 @@ async fn dev_mode_disables_api_auth() {
     let state = AppState {
         config: Arc::new(Config::dev()),
         store,
+        policy: Arc::new(InMemoryPolicyStore::new()),
         audit: AuditSink::disabled(),
     };
     let (status, body) = call(
