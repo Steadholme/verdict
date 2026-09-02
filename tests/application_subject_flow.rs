@@ -142,12 +142,12 @@ async fn post_raw(state: &AppState, uri: &str, token: &str, body: String) -> (St
 
 #[tokio::test]
 async fn application_v2_rejects_wrong_service_scope_and_non_exact_json() {
-    let (state, policy) = state();
+    let (app_state, policy) = state();
     seed_allow(policy.as_ref()).await;
     let encoded = serde_json::to_string(&request_v2("analysis_one")).unwrap();
 
     let (status, _) = post_raw(
-        &state,
+        &app_state,
         "/api/v2/application-check",
         PROJECTION_TOKEN,
         encoded.clone(),
@@ -159,7 +159,13 @@ async fn application_v2_rejects_wrong_service_scope_and_non_exact_json() {
         format!("{},\"unknown\":true}}", encoded.strip_suffix('}').unwrap()),
         format!("{},\"v\":2}}", encoded.strip_suffix('}').unwrap()),
     ] {
-        let (status, _) = post_raw(&state, "/api/v2/application-check", DECISION_TOKEN, body).await;
+        let (status, _) = post_raw(
+            &app_state,
+            "/api/v2/application-check",
+            DECISION_TOKEN,
+            body,
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
@@ -169,7 +175,7 @@ async fn application_v2_rejects_wrong_service_scope_and_non_exact_json() {
         "policy_epoch":1,"revocation_epoch":1
     });
     let (status, _) = post_json(
-        &state,
+        &app_state,
         "/api/v2/application-subject-status",
         DECISION_TOKEN,
         lifecycle,
@@ -178,7 +184,7 @@ async fn application_v2_rejects_wrong_service_scope_and_non_exact_json() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-async fn seed_allow(policy: &InMemoryPolicyStore) {
+async fn seed_application_permission(policy: &InMemoryPolicyStore, permission: &str) {
     policy
         .set_application_subject_status(ApplicationSubjectStatus {
             application_sub: "application:abcdefghijklmnop".to_string(),
@@ -192,10 +198,10 @@ async fn seed_allow(policy: &InMemoryPolicyStore) {
         .await
         .unwrap();
     let edges = vec![ProjectionEdge {
-        edge_id: "edge_application_create".to_string(),
-        projection_key: "projection_application_create".to_string(),
+        edge_id: format!("edge_{}", permission.replace('.', "_")),
+        projection_key: format!("projection_{}", permission.replace('.', "_")),
         subject: "application:abcdefghijklmnop".to_string(),
-        permission: "rikune.analysis.create".to_string(),
+        permission: permission.to_string(),
         effect: Effect::Allow,
         resource_selector: json!({"v":1,"type":"analysis","id":"analysis_one"}),
         condition: None,
@@ -209,6 +215,88 @@ async fn seed_allow(policy: &InMemoryPolicyStore) {
         .replace_projection("grant_abcdefghijklmnop", 1, &hash, edges, 2)
         .await
         .unwrap();
+}
+
+async fn seed_allow(policy: &InMemoryPolicyStore) {
+    seed_application_permission(policy, "rikune.analysis.create").await;
+}
+
+#[tokio::test]
+async fn application_tools_use_explicit_permission_map_and_reject_cross_mapping() {
+    let mappings = [
+        ("analysis.create", "rikune.analysis.create"),
+        ("analysis.read", "rikune.analysis.read"),
+        ("analysis.conversation", "rikune.conversation.use"),
+        ("analysis.upload.cancel", "rikune.upload.cancel"),
+    ];
+    for (index, (canonical_tool, permission)) in mappings.iter().enumerate() {
+        let (app_state, policy) = state();
+        seed_application_permission(policy.as_ref(), permission).await;
+        let mut request = request_v2("analysis_one");
+        request.scopes = vec![canonical_tool.to_string()];
+        request.canonical_tool = canonical_tool.to_string();
+        let (status, body) = post_json(
+            &app_state,
+            "/api/v2/application-check",
+            DECISION_TOKEN,
+            serde_json::to_value(&request).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{canonical_tool}: {body}");
+        let decision: DecisionV2 = serde_json::from_value(body).unwrap();
+        assert_eq!(decision.decision, Decision::Allow, "{canonical_tool}");
+        assert_eq!(decision.permission, *permission, "{canonical_tool}");
+        assert!(verify_application_decision_v2(
+            &request,
+            &decision,
+            decision.issued_at
+        ));
+
+        let wrong_permission = mappings[(index + 1) % mappings.len()].1;
+        let mut tampered = decision.clone();
+        tampered.permission = wrong_permission.to_string();
+        assert!(
+            !verify_application_decision_v2(&request, &tampered, tampered.issued_at),
+            "{canonical_tool} accepted permission tamper"
+        );
+
+        let (cross_state, cross_policy) = state();
+        seed_application_permission(cross_policy.as_ref(), wrong_permission).await;
+        let (status, body) = post_json(
+            &cross_state,
+            "/api/v2/application-check",
+            DECISION_TOKEN,
+            serde_json::to_value(&request).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{canonical_tool}: {body}");
+        let cross_decision: DecisionV2 = serde_json::from_value(body).unwrap();
+        assert_eq!(cross_decision.decision, Decision::Deny, "{canonical_tool}");
+        assert_eq!(cross_decision.permission, *permission, "{canonical_tool}");
+        assert!(verify_application_decision_v2(
+            &request,
+            &cross_decision,
+            cross_decision.issued_at
+        ));
+    }
+
+    let (app_state, policy) = state();
+    seed_allow(policy.as_ref()).await;
+    for scopes in [
+        vec!["rikune.analysis.create".to_string()],
+        vec!["analysis.read".to_string()],
+    ] {
+        let mut request = request_v2("analysis_one");
+        request.scopes = scopes;
+        let (status, _) = post_json(
+            &app_state,
+            "/api/v2/application-check",
+            DECISION_TOKEN,
+            serde_json::to_value(request).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
 }
 
 #[tokio::test]

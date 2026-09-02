@@ -164,7 +164,9 @@ pub async fn application_check_handler(
         return json_error(StatusCode::BAD_REQUEST, "bad-request", message);
     }
     let issued_at = now_secs();
-    let permission = format!("rikune.{}", request.canonical_tool);
+    let permission = application_permission(&request.canonical_tool)
+        .expect("validated canonical_tool has one internal permission")
+        .to_string();
     let status = match state
         .policy
         .application_subject_status(&request.application_sub)
@@ -636,14 +638,14 @@ fn validate_application_request(request: &ApplicationRequestV2) -> Result<(), &'
     {
         return Err("RequestV2 identity, resource, digest, version, or epoch is invalid");
     }
-    if !matches!(
-        request.canonical_tool.as_str(),
-        "analysis.create" | "analysis.read" | "analysis.conversation" | "analysis.upload.cancel"
-    ) {
+    if application_permission(&request.canonical_tool).is_none() {
         return Err("canonical_tool is not in the Analyze public surface");
     }
     if request.scopes.is_empty()
-        || request.scopes.iter().any(|scope| !valid_scope(scope))
+        || request
+            .scopes
+            .iter()
+            .any(|scope| application_permission(scope).is_none())
         || request.scopes.windows(2).any(|pair| pair[0] >= pair[1])
         || !request
             .scopes
@@ -667,14 +669,14 @@ fn valid_opaque(value: &str, max: usize) -> bool {
             .all(|value| value.is_ascii_alphanumeric() || matches!(value, b'_' | b'-' | b'.'))
 }
 
-fn valid_scope(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value.bytes().all(|value| {
-            value.is_ascii_lowercase()
-                || value.is_ascii_digit()
-                || matches!(value, b'.' | b':' | b'_' | b'-')
-        })
+fn application_permission(canonical_tool: &str) -> Option<&'static str> {
+    match canonical_tool {
+        "analysis.create" => Some("rikune.analysis.create"),
+        "analysis.read" => Some("rikune.analysis.read"),
+        "analysis.conversation" => Some("rikune.conversation.use"),
+        "analysis.upload.cancel" => Some("rikune.upload.cancel"),
+        _ => None,
+    }
 }
 
 fn lower_hex_64(value: &str) -> bool {
@@ -758,11 +760,14 @@ pub fn verify_application_decision_v2(
     response: &DecisionV2,
     now: i64,
 ) -> bool {
+    let Some(permission) = application_permission(&request.canonical_tool) else {
+        return false;
+    };
     response.v == 2
         && lower_hex_64(&response.decision_digest)
         && response.subject == request.application_sub
         && response.resource == request.resource
-        && response.permission == format!("rikune.{}", request.canonical_tool)
+        && response.permission == permission
         && response.issued_at > 0
         && response.expires_at - response.issued_at == 30
         && now >= response.issued_at

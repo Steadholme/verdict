@@ -38,9 +38,13 @@ async fn application_request_v2_digest_ttl_and_stale_rejection() {
     let grant_id = format!("grant_{suffix}");
     let source = grant_id.clone();
     let event = format!("event:{suffix}");
-    let edge_id = format!("edge:application:{suffix}");
-    let projection_key = format!("projection:application:{suffix}");
     let resource_id = format!("analysis_{suffix}");
+    let mappings = [
+        ("analysis.create", "rikune.analysis.create"),
+        ("analysis.read", "rikune.analysis.read"),
+        ("analysis.conversation", "rikune.conversation.use"),
+        ("analysis.upload.cancel", "rikune.upload.cancel"),
+    ];
     policy
         .set_application_subject_status(ApplicationSubjectStatus {
             application_sub: application_sub.clone(),
@@ -65,19 +69,23 @@ async fn application_request_v2_digest_ttl_and_stale_rejection() {
         })
         .await
         .unwrap();
-    let edges = vec![ProjectionEdge {
-        edge_id: edge_id.clone(),
-        projection_key,
-        subject: application_sub.clone(),
-        permission: "rikune.analysis.create".to_string(),
-        effect: Effect::Allow,
-        resource_selector: json!({"v":1,"type":"analysis","id":resource_id}),
-        condition: None,
-        not_before: None,
-        expires_at: None,
-        active: true,
-        version: 1,
-    }];
+    let edges = mappings
+        .iter()
+        .enumerate()
+        .map(|(index, (_, permission))| ProjectionEdge {
+            edge_id: format!("edge:application:{index}:{suffix}"),
+            projection_key: format!("projection:application:{index}:{suffix}"),
+            subject: application_sub.clone(),
+            permission: permission.to_string(),
+            effect: Effect::Allow,
+            resource_selector: json!({"v":1,"type":"analysis","id":resource_id}),
+            condition: None,
+            not_before: None,
+            expires_at: None,
+            active: true,
+            version: 1,
+        })
+        .collect::<Vec<_>>();
     let payload_hash = projection_payload_hash(&edges).unwrap();
     policy
         .replace_projection(&source, 1, &payload_hash, edges, 2)
@@ -114,7 +122,9 @@ async fn application_request_v2_digest_ttl_and_stale_rejection() {
         revocation_epoch: 13,
         correlation_id: format!("corr_{suffix}"),
     };
-    let response = app(state)
+    let service = app(state);
+    let response = service
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -144,6 +154,47 @@ async fn application_request_v2_digest_ttl_and_stale_rejection() {
     assert_eq!(decision.expires_at - decision.issued_at, 30);
     assert_eq!(decision.subject_version, 7);
     assert_eq!(decision.policy_epoch, 11);
+
+    for (index, (canonical_tool, permission)) in mappings.iter().enumerate().skip(1) {
+        let mut mapped_request = request.clone();
+        mapped_request.scopes = vec![canonical_tool.to_string()];
+        mapped_request.canonical_tool = canonical_tool.to_string();
+        mapped_request.correlation_id = format!("corr_{index}_{suffix}");
+        let response = service
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v2/application-check")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, format!("Bearer {DECISION_TOKEN}"))
+                    .body(Body::from(serde_json::to_vec(&mapped_request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{canonical_tool}");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let mapped_decision: DecisionV2 = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            mapped_decision.decision,
+            Decision::Allow,
+            "{canonical_tool}"
+        );
+        assert_eq!(mapped_decision.subject, mapped_request.application_sub);
+        assert_eq!(mapped_decision.resource, mapped_request.resource);
+        assert_eq!(mapped_decision.permission, *permission, "{canonical_tool}");
+        assert_eq!(mapped_decision.subject_version, 7, "{canonical_tool}");
+        assert_eq!(mapped_decision.policy_epoch, 11, "{canonical_tool}");
+        assert!(mapped_decision.policy_version > 0, "{canonical_tool}");
+        assert!(verify_application_decision_v2(
+            &mapped_request,
+            &mapped_decision,
+            mapped_decision.issued_at,
+        ));
+    }
 
     let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
     let row = sqlx::query(
