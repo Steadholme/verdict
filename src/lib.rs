@@ -79,12 +79,20 @@ pub fn app(state: AppState) -> Router {
         .route("/api/check", post(handlers::api::check_handler))
         .route("/api/v2/check", post(handlers::api_v2::check_handler))
         .route(
+            "/api/v2/application-check",
+            post(handlers::api_v2::application_check_handler),
+        )
+        .route(
             "/api/v2/projections",
             post(handlers::api_v2::replace_projection),
         )
         .route(
             "/api/v2/subject-status",
             post(handlers::api_v2::set_subject_status),
+        )
+        .route(
+            "/api/v2/application-subject-status",
+            post(handlers::api_v2::set_application_subject_status),
         )
         .route("/api/tuples", post(handlers::api::write_tuple))
         .route("/api/tuples/delete", post(handlers::api::delete_tuple))

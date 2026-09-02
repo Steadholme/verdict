@@ -211,6 +211,12 @@ fn resolve_subject(
     if granted_subject == target_subject {
         return Ok(Some(vec![]));
     }
+    // application principals are direct workload identities. They never inherit
+    // human group membership and therefore cannot enter the existing userset
+    // recursion even though they are valid direct policy subjects.
+    if target_subject.starts_with("application:") {
+        return Ok(None);
+    }
     let Some((object, relation)) = granted_subject.split_once('#') else {
         return Ok(None);
     };
@@ -227,7 +233,7 @@ fn resolve_subject(
         .collect();
     candidates.sort_by(|left, right| left.subject.cmp(&right.subject));
     for membership in candidates {
-        if !is_subject(&membership.subject) {
+        if !is_subject(&membership.subject) || membership.subject.starts_with("application:") {
             seen.remove(&key);
             return Err(EvaluationError::MalformedPolicy);
         }
@@ -394,5 +400,46 @@ mod tests {
             10,
         );
         assert_eq!(result, Err(EvaluationError::UnknownCondition));
+    }
+
+    #[test]
+    fn application_subject_is_direct_only_and_never_inherits_group_membership() {
+        let subject = "application:abcdefghijklmnop";
+        let direct = evaluate(
+            PolicySnapshot {
+                epoch: 1,
+                edges: vec![edge("edge:direct", subject, Effect::Allow)],
+                memberships: vec![],
+                subject_status: None,
+            },
+            subject,
+            "cpa.console.enter",
+            &resource(),
+            &context(),
+            10,
+        )
+        .unwrap();
+        assert_eq!(direct.decision, Decision::Allow);
+
+        let inherited = evaluate(
+            PolicySnapshot {
+                epoch: 1,
+                edges: vec![edge("edge:group", "group:operators#member", Effect::Allow)],
+                memberships: vec![Membership {
+                    object: "group:operators".to_string(),
+                    relation: "member".to_string(),
+                    subject: subject.to_string(),
+                }],
+                subject_status: None,
+            },
+            subject,
+            "cpa.console.enter",
+            &resource(),
+            &context(),
+            10,
+        )
+        .unwrap();
+        assert_eq!(inherited.decision, Decision::Deny);
+        assert_eq!(inherited.reason, "no-grant-path");
     }
 }

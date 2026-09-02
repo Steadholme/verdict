@@ -118,6 +118,43 @@ pub struct SubjectAccessStatus {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationSubjectState {
+    Pending,
+    Active,
+    Suspended,
+    Revoked,
+    Expired,
+}
+
+impl ApplicationSubjectState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Active => "active",
+            Self::Suspended => "suspended",
+            Self::Revoked => "revoked",
+            Self::Expired => "expired",
+        }
+    }
+
+    pub fn allows_access(self) -> bool {
+        self == Self::Active
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ApplicationSubjectStatus {
+    pub application_sub: String,
+    pub state: ApplicationSubjectState,
+    pub source_event_id: String,
+    pub subject_version: i64,
+    pub policy_epoch: i64,
+    pub revocation_epoch: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum Decision {
     Allow,
     Deny,
@@ -140,6 +177,51 @@ pub struct CheckResponse {
     pub epoch: i64,
     pub evaluated_at: i64,
     pub evidence: Vec<Evidence>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ApplicationRequestV2 {
+    pub v: i64,
+    pub application_sub: String,
+    pub client_id: String,
+    pub credential_id: String,
+    pub credential_version: i64,
+    pub grant_id: String,
+    pub package_id: String,
+    pub package_revision_digest: String,
+    pub scopes: Vec<String>,
+    pub canonical_tool: String,
+    pub resource: Resource,
+    pub session_id: String,
+    pub request_sha256: String,
+    pub policy_epoch: i64,
+    pub revocation_epoch: i64,
+    pub correlation_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct DecisionV2 {
+    pub v: i64,
+    pub decision_id: String,
+    pub decision_digest: String,
+    pub decision: Decision,
+    pub subject: String,
+    pub resource: Resource,
+    pub permission: String,
+    pub reason: String,
+    pub evidence: Vec<Evidence>,
+    pub policy_version: i64,
+    pub subject_version: i64,
+    pub policy_epoch: i64,
+    pub issued_at: i64,
+    pub expires_at: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ApplicationDecisionRecord {
+    pub decision: DecisionV2,
+    pub request: ApplicationRequestV2,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -220,6 +302,12 @@ pub fn is_subject(value: &str) -> bool {
     if let Some(id) = value.strip_prefix("service:") {
         return !id.is_empty() && !id.contains('#');
     }
+    if let Some(id) = value.strip_prefix("application:") {
+        return (16..=128).contains(&id.len())
+            && id
+                .bytes()
+                .all(|value| value.is_ascii_alphanumeric() || value == b'_' || value == b'-');
+    }
     value
         .strip_prefix("group:")
         .and_then(|value| value.strip_suffix("#member"))
@@ -262,6 +350,7 @@ mod tests {
         assert!(is_subject("user:u_123"));
         assert!(is_subject("service:sluice"));
         assert!(is_subject("group:infra-admins#member"));
+        assert!(is_subject("application:abcdefghijklmnop"));
         assert!(!is_subject("u_123"));
         assert!(!is_subject("group:infra-admins#owner"));
     }

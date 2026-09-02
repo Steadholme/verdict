@@ -6,12 +6,16 @@ use sha2::{Digest, Sha256};
 use sqlx::postgres::{PgPool, PgPoolOptions, PgRow};
 use sqlx::{Executor, Row};
 
-use crate::policy::{Effect, Membership, PolicyEdge, PolicySnapshot, ProjectionEdge};
-use crate::policy::{SubjectAccessState, SubjectAccessStatus};
+use crate::policy::{
+    ApplicationDecisionRecord, ApplicationSubjectState, ApplicationSubjectStatus, Effect,
+    Membership, PolicyEdge, PolicySnapshot, ProjectionEdge, SubjectAccessState,
+    SubjectAccessStatus,
+};
 
 const MIGRATION_V2: &str = include_str!("../migrations/0002_policy_v2.sql");
 const MIGRATION_V3: &str = include_str!("../migrations/0003_projection_source_fencing.sql");
 const MIGRATION_V4: &str = include_str!("../migrations/0004_subject_access_status.sql");
+const MIGRATION_V5: &str = include_str!("../migrations/0005_application_subject_decisions.sql");
 
 #[derive(Debug, thiserror::Error)]
 pub enum PolicyStoreError {
@@ -61,6 +65,24 @@ pub trait PolicyStore: Send + Sync {
         source_version: i64,
         now: i64,
     ) -> Result<(i64, bool), PolicyStoreError>;
+    async fn application_subject_status(
+        &self,
+        _application_sub: &str,
+    ) -> Result<Option<ApplicationSubjectStatus>, PolicyStoreError> {
+        Ok(None)
+    }
+    async fn set_application_subject_status(
+        &self,
+        _status: ApplicationSubjectStatus,
+    ) -> Result<bool, PolicyStoreError> {
+        Err(PolicyStoreError::Backend)
+    }
+    async fn record_application_decision(
+        &self,
+        _record: ApplicationDecisionRecord,
+    ) -> Result<(), PolicyStoreError> {
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -70,6 +92,8 @@ struct MemoryState {
     memberships: Vec<Membership>,
     projection_sources: HashMap<String, ProjectionSource>,
     subject_statuses: HashMap<String, SubjectAccessStatus>,
+    application_subject_statuses: HashMap<String, ApplicationSubjectStatus>,
+    application_decisions: HashMap<String, ApplicationDecisionRecord>,
 }
 
 #[derive(Default)]
@@ -240,6 +264,76 @@ impl PolicyStore for InMemoryPolicyStore {
         );
         Ok((epoch, false))
     }
+
+    async fn application_subject_status(
+        &self,
+        application_sub: &str,
+    ) -> Result<Option<ApplicationSubjectStatus>, PolicyStoreError> {
+        Ok(self
+            .state
+            .lock()
+            .expect("policy store lock poisoned")
+            .application_subject_statuses
+            .get(application_sub)
+            .cloned())
+    }
+
+    async fn set_application_subject_status(
+        &self,
+        status: ApplicationSubjectStatus,
+    ) -> Result<bool, PolicyStoreError> {
+        let mut state = self.state.lock().expect("policy store lock poisoned");
+        if let Some(existing) = state
+            .application_subject_statuses
+            .get(&status.application_sub)
+        {
+            if status.subject_version < existing.subject_version
+                || status.policy_epoch < existing.policy_epoch
+                || status.revocation_epoch < existing.revocation_epoch
+            {
+                return Err(PolicyStoreError::StaleVersion);
+            }
+            if status.subject_version == existing.subject_version {
+                return if same_application_status(existing, &status) {
+                    Ok(true)
+                } else {
+                    Err(PolicyStoreError::Conflict)
+                };
+            }
+            if !valid_application_transition(existing.state, status.state) {
+                return Err(PolicyStoreError::Conflict);
+            }
+        }
+        state
+            .application_subject_statuses
+            .insert(status.application_sub.clone(), status);
+        state.epoch = state
+            .epoch
+            .checked_add(1)
+            .ok_or(PolicyStoreError::Inconsistent)?;
+        Ok(false)
+    }
+
+    async fn record_application_decision(
+        &self,
+        record: ApplicationDecisionRecord,
+    ) -> Result<(), PolicyStoreError> {
+        let mut state = self.state.lock().expect("policy store lock poisoned");
+        if let Some(existing) = state
+            .application_decisions
+            .get(&record.decision.decision_id)
+        {
+            return if existing.decision.decision_digest == record.decision.decision_digest {
+                Ok(())
+            } else {
+                Err(PolicyStoreError::Conflict)
+            };
+        }
+        state
+            .application_decisions
+            .insert(record.decision.decision_id.clone(), record);
+        Ok(())
+    }
 }
 
 pub struct PgPolicyStore {
@@ -257,7 +351,7 @@ impl PgPolicyStore {
     }
 
     pub async fn migrate(&self) -> Result<(), PolicyStoreError> {
-        for migration in [MIGRATION_V2, MIGRATION_V3, MIGRATION_V4] {
+        for migration in [MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5] {
             let mut transaction = self
                 .pool
                 .begin()
@@ -312,6 +406,25 @@ impl PgPolicyStore {
             source_event_id: get(row, "source_event_id")?,
             source_version: get(row, "source_version")?,
             policy_epoch: get(row, "policy_epoch")?,
+            updated_at: get(row, "updated_at")?,
+        })
+    }
+
+    fn application_status(row: &PgRow) -> Result<ApplicationSubjectStatus, PolicyStoreError> {
+        Ok(ApplicationSubjectStatus {
+            application_sub: get(row, "application_sub")?,
+            state: match get::<String>(row, "state")?.as_str() {
+                "pending" => ApplicationSubjectState::Pending,
+                "active" => ApplicationSubjectState::Active,
+                "suspended" => ApplicationSubjectState::Suspended,
+                "revoked" => ApplicationSubjectState::Revoked,
+                "expired" => ApplicationSubjectState::Expired,
+                _ => return Err(PolicyStoreError::Inconsistent),
+            },
+            source_event_id: get(row, "source_event_id")?,
+            subject_version: get(row, "subject_version")?,
+            policy_epoch: get(row, "policy_epoch")?,
+            revocation_epoch: get(row, "revocation_epoch")?,
             updated_at: get(row, "updated_at")?,
         })
     }
@@ -638,6 +751,184 @@ impl PolicyStore for PgPolicyStore {
             .map_err(|_| PolicyStoreError::Backend)?;
         Ok((epoch, false))
     }
+
+    async fn application_subject_status(
+        &self,
+        application_sub: &str,
+    ) -> Result<Option<ApplicationSubjectStatus>, PolicyStoreError> {
+        sqlx::query(
+            "SELECT application_sub,state,source_event_id,subject_version,policy_epoch,revocation_epoch,updated_at \
+             FROM policy_application_subject_status WHERE application_sub=$1",
+        )
+        .bind(application_sub)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| PolicyStoreError::Backend)?
+        .as_ref()
+        .map(Self::application_status)
+        .transpose()
+    }
+
+    async fn set_application_subject_status(
+        &self,
+        status: ApplicationSubjectStatus,
+    ) -> Result<bool, PolicyStoreError> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| PolicyStoreError::Backend)?;
+        let current_epoch: i64 =
+            sqlx::query("SELECT epoch FROM policy_state WHERE id=1 FOR UPDATE")
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(|_| PolicyStoreError::Backend)?
+                .ok_or(PolicyStoreError::Inconsistent)?
+                .try_get("epoch")
+                .map_err(|_| PolicyStoreError::Inconsistent)?;
+        let existing = sqlx::query(
+            "SELECT application_sub,state,source_event_id,subject_version,policy_epoch,revocation_epoch,updated_at \
+             FROM policy_application_subject_status WHERE application_sub=$1 FOR UPDATE",
+        )
+        .bind(&status.application_sub)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| PolicyStoreError::Backend)?
+        .as_ref()
+        .map(Self::application_status)
+        .transpose()?;
+        if let Some(existing) = existing {
+            if status.subject_version < existing.subject_version
+                || status.policy_epoch < existing.policy_epoch
+                || status.revocation_epoch < existing.revocation_epoch
+            {
+                return Err(PolicyStoreError::StaleVersion);
+            }
+            if status.subject_version == existing.subject_version {
+                if !same_application_status(&existing, &status) {
+                    return Err(PolicyStoreError::Conflict);
+                }
+                transaction
+                    .commit()
+                    .await
+                    .map_err(|_| PolicyStoreError::Backend)?;
+                return Ok(true);
+            }
+            if !valid_application_transition(existing.state, status.state) {
+                return Err(PolicyStoreError::Conflict);
+            }
+        }
+        sqlx::query(
+            "INSERT INTO policy_application_subject_status \
+             (application_sub,state,source_event_id,subject_version,policy_epoch,revocation_epoch,updated_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (application_sub) DO UPDATE SET \
+             state=EXCLUDED.state,source_event_id=EXCLUDED.source_event_id,subject_version=EXCLUDED.subject_version, \
+             policy_epoch=EXCLUDED.policy_epoch,revocation_epoch=EXCLUDED.revocation_epoch,updated_at=EXCLUDED.updated_at",
+        )
+        .bind(&status.application_sub)
+        .bind(status.state.as_str())
+        .bind(&status.source_event_id)
+        .bind(status.subject_version)
+        .bind(status.policy_epoch)
+        .bind(status.revocation_epoch)
+        .bind(status.updated_at)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| if has_sqlstate(&error, "23514") { PolicyStoreError::Conflict } else { PolicyStoreError::Backend })?;
+        let epoch = current_epoch
+            .checked_add(1)
+            .ok_or(PolicyStoreError::Inconsistent)?;
+        let updated =
+            sqlx::query("UPDATE policy_state SET epoch=$1,updated_at=$2 WHERE id=1 AND epoch=$3")
+                .bind(epoch)
+                .bind(status.updated_at)
+                .bind(current_epoch)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|_| PolicyStoreError::Backend)?;
+        if updated.rows_affected() != 1 {
+            return Err(PolicyStoreError::Inconsistent);
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| PolicyStoreError::Backend)?;
+        Ok(false)
+    }
+
+    async fn record_application_decision(
+        &self,
+        record: ApplicationDecisionRecord,
+    ) -> Result<(), PolicyStoreError> {
+        let decision_json = serde_json::to_value(&record.decision.evidence)
+            .map_err(|_| PolicyStoreError::Inconsistent)?;
+        let request_json =
+            serde_json::to_value(&record.request).map_err(|_| PolicyStoreError::Inconsistent)?;
+        let resource_json = serde_json::to_value(&record.decision.resource)
+            .map_err(|_| PolicyStoreError::Inconsistent)?;
+        let result = sqlx::query(
+            "INSERT INTO policy_application_decisions_v2 \
+             (decision_id,decision_digest,application_sub,permission,resource,decision,reason,request_v2,evidence,policy_version,subject_version,policy_epoch,issued_at,expires_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (decision_id) DO NOTHING",
+        )
+        .bind(&record.decision.decision_id)
+        .bind(&record.decision.decision_digest)
+        .bind(&record.decision.subject)
+        .bind(&record.decision.permission)
+        .bind(resource_json)
+        .bind(format!("{:?}", record.decision.decision))
+        .bind(&record.decision.reason)
+        .bind(request_json)
+        .bind(decision_json)
+        .bind(record.decision.policy_version)
+        .bind(record.decision.subject_version)
+        .bind(record.decision.policy_epoch)
+        .bind(record.decision.issued_at)
+        .bind(record.decision.expires_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| if has_sqlstate(&error, "23505") { PolicyStoreError::Conflict } else { PolicyStoreError::Backend })?;
+        if result.rows_affected() == 0 {
+            let digest: String = sqlx::query(
+                "SELECT decision_digest FROM policy_application_decisions_v2 WHERE decision_id=$1",
+            )
+            .bind(&record.decision.decision_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|_| PolicyStoreError::Backend)?
+            .try_get("decision_digest")
+            .map_err(|_| PolicyStoreError::Inconsistent)?;
+            if digest != record.decision.decision_digest {
+                return Err(PolicyStoreError::Conflict);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn valid_application_transition(
+    from: ApplicationSubjectState,
+    to: ApplicationSubjectState,
+) -> bool {
+    use ApplicationSubjectState::{Active, Expired, Pending, Revoked, Suspended};
+    matches!(
+        (from, to),
+        (Pending, Active | Revoked | Expired)
+            | (Active, Suspended | Revoked | Expired)
+            | (Suspended, Active | Revoked | Expired)
+    )
+}
+
+fn same_application_status(
+    left: &ApplicationSubjectStatus,
+    right: &ApplicationSubjectStatus,
+) -> bool {
+    left.application_sub == right.application_sub
+        && left.state == right.state
+        && left.source_event_id == right.source_event_id
+        && left.subject_version == right.subject_version
+        && left.policy_epoch == right.policy_epoch
+        && left.revocation_epoch == right.revocation_epoch
 }
 
 fn get<T>(row: &PgRow, column: &str) -> Result<T, PolicyStoreError>
