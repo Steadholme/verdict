@@ -8,13 +8,14 @@ use tower::ServiceExt;
 
 use verdict::audit::AuditSink;
 use verdict::config::{Config, ServiceCredentials};
+use verdict::handlers::api_v2::verify_application_decision_v2;
 use verdict::policy::{
-    ApplicationRequestV2, ApplicationSubjectState, ApplicationSubjectStatus, DecisionV2, Effect,
-    ProjectionEdge, Resource, SubjectAccessState,
+    any_resource_selector, ApplicationRequestV2, ApplicationSubjectState, ApplicationSubjectStatus,
+    Decision, DecisionContext, DecisionV2, Effect, ProjectionEdge, Resource, SubjectAccessState,
 };
 use verdict::policy_store::{projection_payload_hash, PgPolicyStore, PolicyStore};
-use verdict::store::{PgStore, Store};
-use verdict::{app, AppState};
+use verdict::store::{PgStore, Store, Tuple};
+use verdict::{app, policy_check, AppState};
 
 const DECISION_TOKEN: &str = "decision-token-00000000000000000001";
 const PROJECTION_TOKEN: &str = "projection-token-000000000000000001";
@@ -34,7 +35,8 @@ async fn application_request_v2_digest_ttl_and_stale_rejection() {
 
     let suffix = verdict::now_nanos().to_string();
     let application_sub = format!("application:app{suffix}");
-    let source = format!("grant:application:{suffix}");
+    let grant_id = format!("grant_{suffix}");
+    let source = grant_id.clone();
     let event = format!("event:{suffix}");
     let edge_id = format!("edge:application:{suffix}");
     let projection_key = format!("projection:application:{suffix}");
@@ -97,7 +99,7 @@ async fn application_request_v2_digest_ttl_and_stale_rejection() {
         client_id: format!("client_{suffix}"),
         credential_id: format!("cred_{suffix}"),
         credential_version: 3,
-        grant_id: format!("grant_{suffix}"),
+        grant_id,
         package_id: "pkg_analyze_mcp_client".to_string(),
         package_revision_digest: "a".repeat(64),
         scopes: vec!["analysis.create".to_string()],
@@ -129,8 +131,19 @@ async fn application_request_v2_digest_ttl_and_stale_rejection() {
         .await
         .unwrap();
     let decision: DecisionV2 = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(decision.decision, Decision::Allow);
+    assert!(verify_application_decision_v2(
+        &request,
+        &decision,
+        decision.issued_at
+    ));
+    assert_eq!(decision.subject, request.application_sub);
+    assert_eq!(decision.resource, request.resource);
+    assert_eq!(decision.permission, "rikune.analysis.create");
+    assert!(decision.policy_version > 0);
     assert_eq!(decision.expires_at - decision.issued_at, 30);
     assert_eq!(decision.subject_version, 7);
+    assert_eq!(decision.policy_epoch, 11);
 
     let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
     let row = sqlx::query(
@@ -150,6 +163,68 @@ async fn application_request_v2_digest_ttl_and_stale_rejection() {
     assert_eq!(row.get::<i64, _>("ttl"), 30);
 
     let legacy_subject = format!("user:legacy-{suffix}");
+    let legacy_service = format!("service:legacy-{suffix}");
+    let legacy_group = format!("group:legacy-{suffix}");
+    let legacy_group_member = format!("user:legacy-group-member-{suffix}");
+    let legacy_group_userset = format!("{legacy_group}#member");
+    let legacy_source = format!("grant:legacy:{suffix}");
+    let legacy_permission = "cpa.console.enter";
+    let legacy_edges = vec![
+        ProjectionEdge {
+            edge_id: format!("edge:legacy-user:{suffix}"),
+            projection_key: format!("projection:legacy-user:{suffix}"),
+            subject: legacy_subject.clone(),
+            permission: legacy_permission.to_string(),
+            effect: Effect::Allow,
+            resource_selector: any_resource_selector(),
+            condition: None,
+            not_before: None,
+            expires_at: None,
+            active: true,
+            version: 1,
+        },
+        ProjectionEdge {
+            edge_id: format!("edge:legacy-service:{suffix}"),
+            projection_key: format!("projection:legacy-service:{suffix}"),
+            subject: legacy_service.clone(),
+            permission: legacy_permission.to_string(),
+            effect: Effect::Allow,
+            resource_selector: any_resource_selector(),
+            condition: None,
+            not_before: None,
+            expires_at: None,
+            active: true,
+            version: 1,
+        },
+        ProjectionEdge {
+            edge_id: format!("edge:legacy-group:{suffix}"),
+            projection_key: format!("projection:legacy-group:{suffix}"),
+            subject: legacy_group_userset.clone(),
+            permission: legacy_permission.to_string(),
+            effect: Effect::Allow,
+            resource_selector: any_resource_selector(),
+            condition: None,
+            not_before: None,
+            expires_at: None,
+            active: true,
+            version: 1,
+        },
+    ];
+    let legacy_payload_hash = projection_payload_hash(&legacy_edges).unwrap();
+    policy
+        .replace_projection(&legacy_source, 1, &legacy_payload_hash, legacy_edges, 3)
+        .await
+        .unwrap();
+    tuple_store
+        .add_tuple(&Tuple {
+            id: format!("tuple:legacy-group:{suffix}"),
+            object: legacy_group.clone(),
+            relation: "member".to_string(),
+            subject: legacy_group_member.clone(),
+            created_at: 4,
+        })
+        .await
+        .unwrap();
     policy
         .set_subject_status(
             &legacy_subject,
@@ -160,12 +235,48 @@ async fn application_request_v2_digest_ttl_and_stale_rejection() {
         )
         .await
         .unwrap();
-    assert!(policy
-        .snapshot("cpa.console.enter", &legacy_subject)
-        .await
-        .unwrap()
-        .subject_status
-        .is_some());
+    let legacy_resource = Resource {
+        kind: "route".to_string(),
+        id: "cpa-root".to_string(),
+    };
+    let legacy_context = DecisionContext {
+        zone: Some("internal".to_string()),
+        mfa: true,
+        ip: None,
+        request_id: Some(format!("legacy-{suffix}")),
+        break_glass: false,
+    };
+    for (subject, expected_reason) in [
+        (legacy_subject.as_str(), "allow-direct"),
+        (legacy_service.as_str(), "allow-direct"),
+        (legacy_group_member.as_str(), "allow-userset"),
+    ] {
+        let snapshot = policy.snapshot(legacy_permission, subject).await.unwrap();
+        if subject == legacy_subject {
+            assert_eq!(
+                snapshot.subject_status.as_ref().unwrap().state,
+                SubjectAccessState::Active
+            );
+        }
+        if subject == legacy_group_member {
+            assert!(snapshot.memberships.iter().any(|membership| {
+                membership.object == legacy_group
+                    && membership.relation == "member"
+                    && membership.subject == legacy_group_member
+            }));
+        }
+        let response = policy_check::evaluate(
+            snapshot,
+            subject,
+            legacy_permission,
+            &legacy_resource,
+            &legacy_context,
+            10,
+        )
+        .unwrap();
+        assert_eq!(response.decision, Decision::Allow);
+        assert_eq!(response.reason, expected_reason);
+    }
 
     sqlx::query("DELETE FROM policy_application_decisions_v2 WHERE application_sub=$1")
         .bind(&application_sub)
@@ -182,6 +293,16 @@ async fn application_request_v2_digest_ttl_and_stale_rejection() {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::query("DELETE FROM policy_edges_v2 WHERE source_grant_id=$1")
+        .bind(&legacy_source)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM policy_projection_source WHERE source_grant_id=$1")
+        .bind(&legacy_source)
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("DELETE FROM policy_application_subject_status WHERE application_sub=$1")
         .bind(&application_sub)
         .execute(&pool)
@@ -190,6 +311,10 @@ async fn application_request_v2_digest_ttl_and_stale_rejection() {
     sqlx::query("DELETE FROM policy_subject_status WHERE subject=$1")
         .bind(&legacy_subject)
         .execute(&pool)
+        .await
+        .unwrap();
+    tuple_store
+        .delete_tuple(&legacy_group, "member", &legacy_group_member)
         .await
         .unwrap();
 }
