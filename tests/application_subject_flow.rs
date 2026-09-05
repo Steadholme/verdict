@@ -603,3 +603,41 @@ async fn typed_application_status_is_monotonic_and_legacy_subjects_remain_valid(
     assert!(verdict::policy::is_subject("service:sluice"));
     assert!(verdict::policy::is_subject("group:ops#member"));
 }
+
+#[tokio::test]
+async fn lifecycle_accepts_access_publisher_event_ids_and_same_state_updates() {
+    let (state, _) = state();
+    let mut body = json!({
+        "v":1,"application_sub":"application:abcdefghijklmnop","state":"active",
+        "source_event_id":format!("access-application-status-v1:{}", "a".repeat(64)),
+        "subject_version":1,"policy_epoch":1,"revocation_epoch":1
+    });
+    let (status, _) = post_json(
+        &state,
+        "/api/v2/application-subject-status",
+        LIFECYCLE_TOKEN,
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    for version in [1, 2] {
+        body["source_event_id"] = format!(
+            "access-application-status-v1_{}",
+            version.to_string().repeat(64)
+        )
+        .into();
+        body["subject_version"] = version.into();
+        body["revocation_epoch"] = version.into();
+        let (status, response) = post_json(
+            &state,
+            "/api/v2/application-subject-status",
+            LIFECYCLE_TOKEN,
+            body.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        assert_eq!(response["replayed"], false);
+        assert_eq!(response["subject_version"], version);
+        assert_eq!(response["revocation_epoch"], version);
+    }
+}
