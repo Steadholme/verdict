@@ -911,12 +911,16 @@ fn valid_application_transition(
     to: ApplicationSubjectState,
 ) -> bool {
     use ApplicationSubjectState::{Active, Expired, Pending, Revoked, Suspended};
-    matches!(
-        (from, to),
-        (Pending, Active | Revoked | Expired)
-            | (Active, Suspended | Revoked | Expired)
-            | (Suspended, Active | Revoked | Expired)
-    )
+    // Credential changes advance the authoritative version without changing the
+    // application state. Callers already enforce monotonic versions and epochs;
+    // accepting a same-state snapshot must never permit terminal-state revival.
+    from == to
+        || matches!(
+            (from, to),
+            (Pending, Active | Revoked | Expired)
+                | (Active, Suspended | Revoked | Expired)
+                | (Suspended, Active | Revoked | Expired)
+        )
 }
 
 fn same_application_status(
