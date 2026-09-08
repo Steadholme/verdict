@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en"{{THEME_ATTR}}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="{{COLOR_SCHEME}}">
+  <title>Subjects · Verdict · Steadholme</title>
+  <link rel="stylesheet" href="{{CSS_PATH}}">
+</head>
+<body class="page-v2">
+{{APPBAR}}
+<main class="v2-page">
+  <header class="pagehead">
+    <div class="pagehead__titles">
+      <h1>Subjects</h1>
+      <p class="pagehead__sub">{{HEAD_SUB}}</p>
+    </div>
+  </header>
+
+  <section class="tiles">
+    <div class="tile"><span class="tile__value">{{T_TOTAL}}</span><span class="tile__label">subjects</span></div>
+    <div class="tile"><span class="tile__value">{{T_ACTIVE}}</span><span class="tile__label">active</span></div>
+    <div class="tile tile--frozen"><span class="tile__value">{{T_FROZEN}}</span><span class="tile__label">frozen</span></div>
+    <div class="tile tile--terminated"><span class="tile__value">{{T_TERMINATED}}</span><span class="tile__label">terminated</span></div>
+  </section>
+
+  {{BANNER}}
+
+  <div class="two-col">
+    <div class="two-col__main">
+      <section class="card">
+        <div class="card__head"><h2>Subjects</h2><span class="card__count">{{COUNT}}</span></div>
+        <div class="card__pad"><div class="fchips">{{FILTER_CHIPS}}</div></div>
+        {{ROWS}}
+      </section>
+    </div>
+    <aside class="two-col__rail">
+      <section class="card">
+        <div class="card__head"><h2>Set subject state</h2></div>
+        <div class="card__pad">
+          <form method="post" action="/subjects" class="form-grid">
+            <input type="hidden" name="csrf_token" value="{{CSRF}}">
+            <div class="field field--wide"><label for="s-subject">Subject</label><input type="text" id="s-subject" name="subject" value="{{F_SUBJECT}}" autocomplete="off" spellcheck="false" placeholder="user:e.park" required></div>
+            <div class="field field--wide"><label for="s-state">State</label>
+              <select id="s-state" name="state">{{STATE_OPTIONS}}</select>
+            </div>
+            <div class="field field--wide"><label for="s-event">source_event_id</label><input type="text" id="s-event" name="source_event_id" autocomplete="off" spellcheck="false" placeholder="evt_ag_91c0" required></div>
+            <div class="field field--wide"><label for="s-version">source_version</label><input type="text" id="s-version" name="source_version" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="4" required></div>
+            <div class="form-actions"><button class="btn btn-primary" type="submit">{{ICON_SNOW}}Apply state</button></div>
+          </form>
+        </div>
+      </section>
+      <section class="card">
+        <div class="card__head"><h2>Fence</h2></div>
+        <div class="defs">
+          <div class="defs__row"><span class="defs__term">Version</span><span class="defs__value">source_version &gt; current · else the write is refused</span></div>
+          <div class="defs__row"><span class="defs__term">Frozen</span><span class="defs__value">every check denies · grants kept</span></div>
+          <div class="defs__row"><span class="defs__term">Terminated</span><span class="defs__value">grants projected away · deny</span></div>
+          <div class="defs__row"><span class="defs__term">Scope</span><span class="defs__value">lifecycle token on the API · SSO operator here</span></div>
+          <div class="defs__row"><span class="defs__term">Audit</span><span class="defs__value mono">verdict.subject.status</span></div>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  {{FOOTER}}
+</main>
+</body>
+</html>

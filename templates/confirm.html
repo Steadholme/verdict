@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en"{{THEME_ATTR}}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="{{COLOR_SCHEME}}">
+  <title>Delete tuple · Verdict · Steadholme</title>
+  <link rel="stylesheet" href="{{CSS_PATH}}">
+</head>
+<body class="page-v2">
+{{APPBAR}}
+<main class="v2-page v2-narrow">
+  <nav class="crumb" aria-label="Breadcrumb"><a href="/">Console</a><span class="crumb__sep">/</span><span class="crumb__here">Delete tuple</span></nav>
+  <section class="confirm">
+    <div class="confirm__pad">
+      <h1 class="confirm__title">Delete tuple</h1>
+      <div class="tline">{{TUPLE_LINE}}</div>
+      <p class="confirm__note">{{CONSEQUENCE}}</p>
+      <form method="post" action="/delete" class="confirm__actions">
+        <input type="hidden" name="csrf_token" value="{{CSRF}}">
+        <input type="hidden" name="object" value="{{OBJECT}}">
+        <input type="hidden" name="relation" value="{{RELATION}}">
+        <input type="hidden" name="subject" value="{{SUBJECT}}">
+        <a class="btn btn-secondary" href="/">Cancel</a>
+        <button class="btn btn-primary" type="submit">{{ICON_TRASH}}Delete tuple</button>
+      </form>
+    </div>
+  </section>
+  {{FOOTER}}
+</main>
+</body>
+</html>

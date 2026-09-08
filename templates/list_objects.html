@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en"{{THEME_ATTR}}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="{{COLOR_SCHEME}}">
+  <title>List objects · Verdict · Steadholme</title>
+  <link rel="stylesheet" href="{{CSS_PATH}}">
+</head>
+<body class="page-v2">
+{{APPBAR}}
+<main class="v2-page">
+  <header class="pagehead">
+    <div class="pagehead__titles">
+      <h1>List objects</h1>
+      <p class="pagehead__sub">what a subject can do · relation × subject → objects</p>
+    </div>
+  </header>
+
+  <section class="card">
+    <div class="card__head"><h2>Query</h2><span class="card__count">{{QUERY_META}}</span></div>
+    <div class="card__pad">
+      <form method="get" action="/list-objects" class="form-grid">
+        <div class="field"><label for="lo-relation">Relation</label><input type="text" id="lo-relation" name="relation" value="{{F_RELATION}}" autocomplete="off" spellcheck="false" placeholder="viewer"></div>
+        <div class="field"><label for="lo-subject">Subject</label><input type="text" id="lo-subject" name="subject" value="{{F_SUBJECT}}" autocomplete="off" spellcheck="false" placeholder="user:w33d"></div>
+        <div class="form-actions"><button class="btn btn-primary" type="submit">{{ICON_LIST}}What can they do?</button></div>
+      </form>
+    </div>
+  </section>
+
+  <div class="two-col">
+    <div class="two-col__main">
+      <section class="card">
+        <div class="card__head"><h2>{{OBJECTS_TITLE}}</h2><span class="card__count">{{OBJECTS_COUNT}}</span></div>
+        {{OBJECT_ROWS}}
+      </section>
+    </div>
+    <aside class="two-col__rail">
+      <section class="card">
+        <div class="card__head"><h2>By type</h2></div>
+        {{BY_TYPE}}
+      </section>
+      <section class="card">
+        <div class="card__head"><h2>Subject</h2></div>
+        {{SUBJECT_DEFS}}
+      </section>
+    </aside>
+  </div>
+
+  {{FOOTER}}
+</main>
+</body>
+</html>

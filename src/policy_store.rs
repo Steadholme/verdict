@@ -57,6 +57,10 @@ pub trait PolicyStore: Send + Sync {
         now: i64,
     ) -> Result<i64, PolicyStoreError>;
     async fn bump_epoch(&self, now: i64) -> Result<i64, PolicyStoreError>;
+    /// The current policy epoch. Read-only; drives the console chrome.
+    async fn epoch(&self) -> Result<i64, PolicyStoreError>;
+    /// Every JML subject status, newest change first. Read-only; drives the Subjects page.
+    async fn list_subject_statuses(&self) -> Result<Vec<SubjectAccessStatus>, PolicyStoreError>;
     async fn set_subject_status(
         &self,
         subject: &str,
@@ -218,6 +222,21 @@ impl PolicyStore for InMemoryPolicyStore {
             .checked_add(1)
             .ok_or(PolicyStoreError::Inconsistent)?;
         Ok(state.epoch)
+    }
+
+    async fn epoch(&self) -> Result<i64, PolicyStoreError> {
+        Ok(self.state.lock().expect("policy store lock poisoned").epoch)
+    }
+
+    async fn list_subject_statuses(&self) -> Result<Vec<SubjectAccessStatus>, PolicyStoreError> {
+        let state = self.state.lock().expect("policy store lock poisoned");
+        let mut statuses: Vec<_> = state.subject_statuses.values().cloned().collect();
+        statuses.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| a.subject.cmp(&b.subject))
+        });
+        Ok(statuses)
     }
 
     async fn set_subject_status(
@@ -652,6 +671,29 @@ impl PolicyStore for PgPolicyStore {
         .ok_or(PolicyStoreError::Inconsistent)?
         .try_get("epoch")
         .map_err(|_| PolicyStoreError::Inconsistent)
+    }
+
+    async fn epoch(&self) -> Result<i64, PolicyStoreError> {
+        sqlx::query("SELECT epoch FROM policy_state WHERE id=1")
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|_| PolicyStoreError::Backend)?
+            .ok_or(PolicyStoreError::Inconsistent)?
+            .try_get("epoch")
+            .map_err(|_| PolicyStoreError::Inconsistent)
+    }
+
+    async fn list_subject_statuses(&self) -> Result<Vec<SubjectAccessStatus>, PolicyStoreError> {
+        sqlx::query(
+            "SELECT subject,state,source_event_id,source_version,policy_epoch,updated_at \
+             FROM policy_subject_status ORDER BY updated_at DESC,subject ASC LIMIT 500",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| PolicyStoreError::Backend)?
+        .iter()
+        .map(Self::subject_status)
+        .collect()
     }
 
     async fn set_subject_status(

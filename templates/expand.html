@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en"{{THEME_ATTR}}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="{{COLOR_SCHEME}}">
+  <title>Expand · Verdict · Steadholme</title>
+  <link rel="stylesheet" href="{{CSS_PATH}}">
+</head>
+<body class="page-v2">
+{{APPBAR}}
+<main class="v2-page">
+  <header class="pagehead">
+    <div class="pagehead__titles">
+      <h1>Expand</h1>
+      <p class="pagehead__sub">who holds a relation on an object · usersets flattened · depth ≤ 5</p>
+    </div>
+  </header>
+
+  <section class="card">
+    <div class="card__head"><h2>Query</h2><span class="card__count">{{QUERY_META}}</span></div>
+    <div class="card__pad">
+      <form method="get" action="/expand" class="form-grid">
+        <div class="field"><label for="ex-object">Object</label><input type="text" id="ex-object" name="object" value="{{F_OBJECT}}" autocomplete="off" spellcheck="false" placeholder="doc:secret"></div>
+        <div class="field"><label for="ex-relation">Relation</label><input type="text" id="ex-relation" name="relation" value="{{F_RELATION}}" autocomplete="off" spellcheck="false" placeholder="viewer"></div>
+        <div class="form-actions"><button class="btn btn-primary" type="submit">{{ICON_BRANCH}}Who has it?</button></div>
+      </form>
+    </div>
+  </section>
+
+  <div class="two-col">
+    <div class="two-col__main">
+      <section class="card">
+        <div class="card__head"><h2>Access tree</h2><span class="card__count">{{TREE_COUNT}}</span></div>
+        <div class="card__pad">{{TREE}}</div>
+      </section>
+    </div>
+    <aside class="two-col__rail">
+      <section class="card">
+        <div class="card__head"><h2>Direct grants</h2><span class="card__count">{{DIRECT_COUNT}}</span></div>
+        <div class="card__pad">{{DIRECT}}</div>
+      </section>
+      <section class="card">
+        <div class="card__head"><h2>Resolved members</h2><span class="card__count">{{MEMBERS_COUNT}}</span></div>
+        <div class="card__pad">{{MEMBERS}}</div>
+      </section>
+      <section class="card">
+        <div class="card__head"><h2>Expansion</h2></div>
+        {{EXPANSION_DEFS}}
+      </section>
+    </aside>
+  </div>
+
+  {{FOOTER}}
+</main>
+</body>
+</html>

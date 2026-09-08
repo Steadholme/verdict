@@ -49,6 +49,16 @@ impl PolicyStore for InconsistentPolicyStore {
         Err(PolicyStoreError::Backend)
     }
 
+    async fn epoch(&self) -> Result<i64, PolicyStoreError> {
+        Err(PolicyStoreError::Backend)
+    }
+
+    async fn list_subject_statuses(
+        &self,
+    ) -> Result<Vec<verdict::policy::SubjectAccessStatus>, PolicyStoreError> {
+        Err(PolicyStoreError::Backend)
+    }
+
     async fn set_subject_status(
         &self,
         _subject: &str,

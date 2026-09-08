@@ -67,12 +67,24 @@ pub struct AppState {
 pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(handlers::health::healthz))
+        .route(handlers::APP_CSS_PATH, get(handlers::app_css_asset))
         // --- SSO admin console ---
         .route(
             "/",
             get(handlers::console::index).post(handlers::console::add),
         )
-        .route("/delete", post(handlers::console::delete))
+        .route(
+            "/delete",
+            get(handlers::console::confirm_delete).post(handlers::console::delete),
+        )
+        .route("/decisions", get(handlers::pages::decisions))
+        .route("/expand", get(handlers::pages::expand))
+        .route("/list-objects", get(handlers::pages::list_objects))
+        .route(
+            "/subjects",
+            get(handlers::pages::subjects).post(handlers::pages::set_subject_state),
+        )
+        .route("/api", get(handlers::pages::api_page))
         .route("/import", post(handlers::console::import))
         .route("/export", get(handlers::console::export))
         // --- /api/* decision API (own service-token auth inside the handlers) ---

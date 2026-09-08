@@ -83,6 +83,11 @@ struct Inner {
 
 impl AuditSink {
     /// Disabled sink: `emit` is a no-op, no channel and no worker. The dev/test default.
+    /// Whether events are actually shipped (an ingest token and a Watchtower URL are set).
+    pub fn is_enabled(&self) -> bool {
+        self.inner.is_some()
+    }
+
     pub fn disabled() -> Self {
         AuditSink { inner: None }
     }

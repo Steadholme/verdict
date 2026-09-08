@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en"{{THEME_ATTR}}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="{{COLOR_SCHEME}}">
+  <title>Decision inspector · Verdict · Steadholme</title>
+  <link rel="stylesheet" href="{{CSS_PATH}}">
+</head>
+<body class="page-v2">
+{{APPBAR}}
+<main class="v2-page">
+  <header class="pagehead">
+    <div class="pagehead__titles">
+      <h1>Decision inspector</h1>
+      <p class="pagehead__sub">POST /api/v2/check · typed permission · resource · context · epoch {{EPOCH}}</p>
+    </div>
+  </header>
+
+  <div class="two-col">
+    <div class="two-col__main">
+      <section class="card">
+        <div class="card__head"><h2>Request</h2></div>
+        <div class="card__pad">
+          <form method="get" action="/decisions" class="form-grid">
+            <div class="field"><label for="d-subject">Subject</label><input type="text" id="d-subject" name="subject" value="{{F_SUBJECT}}" autocomplete="off" spellcheck="false" placeholder="user:w33d"></div>
+            <div class="field"><label for="d-permission">Permission</label><input type="text" id="d-permission" name="permission" value="{{F_PERMISSION}}" autocomplete="off" spellcheck="false" placeholder="ledger.post.approve"></div>
+            <div class="field"><label for="d-kind">Resource kind</label><input type="text" id="d-kind" name="resource_kind" value="{{F_KIND}}" autocomplete="off" spellcheck="false" placeholder="ledger"></div>
+            <div class="field"><label for="d-id">Resource id</label><input type="text" id="d-id" name="resource_id" value="{{F_ID}}" autocomplete="off" spellcheck="false" placeholder="ledger:fin-2026"></div>
+            <div class="field"><label for="d-zone">zone</label><input type="text" id="d-zone" name="zone" value="{{F_ZONE}}" autocomplete="off" spellcheck="false" placeholder="eu"></div>
+            <div class="field"><label for="d-ip">ip</label><input type="text" id="d-ip" name="ip" value="{{F_IP}}" autocomplete="off" spellcheck="false" placeholder="10.0.4.11"></div>
+            <div class="field"><label for="d-req">request_id</label><input type="text" id="d-req" name="request_id" value="{{F_REQUEST_ID}}" autocomplete="off" spellcheck="false" placeholder="req_7f3ac91e"></div>
+            <div class="field"><label for="d-risk">Risk</label>
+              <select id="d-risk" name="risk">{{RISK_OPTIONS}}</select>
+            </div>
+            <div class="field field--wide">
+              <div class="toggles">
+                <label class="toggle"><input type="checkbox" name="mfa" value="on"{{MFA_CHECKED}}>mfa</label>
+                <label class="toggle"><input type="checkbox" name="break_glass" value="on"{{BG_CHECKED}}>break_glass</label>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-primary" type="submit">{{ICON_PLAY}}Evaluate</button>
+              <a class="btn btn-ghost" href="/decisions">Reset</a>
+              <span class="form-note">{{EVAL_META}}</span>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card__head"><h2>Response</h2><span class="card__count">application/json</span></div>
+        <div class="card__pad">{{RESPONSE_CODE}}</div>
+      </section>
+    </div>
+
+    <aside class="two-col__rail">
+      {{VERDICT}}
+      {{DECISION_DEFS}}
+      {{EVIDENCE}}
+    </aside>
+  </div>
+
+  {{FOOTER}}
+</main>
+</body>
+</html>

@@ -1,150 +1,128 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en"{{THEME_ATTR}}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
-  <title>Authorization · Verdict · Steadholme</title>
-  <style>{{CSS}}</style>
+  <meta name="color-scheme" content="{{COLOR_SCHEME}}">
+  <title>Console · Verdict · Steadholme</title>
+  <link rel="stylesheet" href="{{CSS_PATH}}">
 </head>
-<body class="page-console">
-{{TOPBAR}}
-<main class="console console--wide">
-  <div class="console__head">
-    <h1>Policy decision point</h1>
-    <p class="sub">Zanzibar-style relation tuples — <code>object#relation@subject</code>. A subject may be a concrete principal (<code>user:w33d</code>) or a userset (<code>group:eng#member</code>) to model indirection. Every backend consults <code>POST /api/check</code>.</p>
-  </div>
+<body class="page-v2">
+{{APPBAR}}
+<main class="v2-page">
+  <header class="pagehead">
+    <div class="pagehead__titles">
+      <h1>Policy decision point</h1>
+      <p class="pagehead__sub">{{HEAD_SUB}}</p>
+    </div>
+  </header>
 
-  <div class="layout">
-    <section class="reading">
-      <div class="card">
-        <div class="card__head"><h2>Relation tuples</h2><span class="muted">{{COUNT}}</span></div>
-        <div class="tuple-scroll">
-          <table class="tuples">
-            <thead>
-              <tr><th>Object</th><th>Relation</th><th>Subject</th><th>Created</th><th></th></tr>
-            </thead>
-            <tbody>
-              {{ROWS}}
-            </tbody>
+  <section class="tiles">
+    <div class="tile"><span class="tile__value">{{T_TUPLES}}</span><span class="tile__label">tuples</span></div>
+    <div class="tile"><span class="tile__value">{{T_USERSETS}}</span><span class="tile__label">usersets</span></div>
+    <div class="tile"><span class="tile__value">{{T_OBJECTS}}</span><span class="tile__label">objects</span></div>
+    <div class="tile tile--mark"><span class="tile__value">{{T_EPOCH}}</span><span class="tile__label">epoch</span></div>
+  </section>
+
+  <div class="two-col">
+    <div class="two-col__main">
+      <section class="card">
+        <div class="card__head"><h2>Relation tuples</h2><span class="card__count">{{COUNT}}</span></div>
+        <form class="filterbar" method="get" action="/">
+          <div class="filterbar__field filterbar__field--grow">
+            <label for="q">Search tuples</label>
+            <input type="search" id="q" name="q" value="{{Q}}" placeholder="doc:secret" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="filterbar__actions"><button class="btn btn-secondary" type="submit">Search</button></div>
+        </form>
+        <div class="card__pad"><div class="fchips">{{FILTER_CHIPS}}</div></div>
+        <div class="table-scroll">
+          <table class="ttable">
+            <thead><tr><th>Object</th><th>Relation</th><th>Subject</th><th>Created</th><th>Source</th><th></th></tr></thead>
+            <tbody>{{ROWS}}</tbody>
           </table>
         </div>
-      </div>
+        {{PAGER}}
+      </section>
 
-      <div class="card">
+      <section class="card">
         <div class="card__head"><h2>Add tuple</h2></div>
-        <div class="card__body">
-          <form method="post" action="/" class="grid-form">
+        <div class="card__pad">
+          <form method="post" action="/" class="tuple-form">
             <input type="hidden" name="csrf_token" value="{{CSRF}}">
-            <div class="field">
-              <label for="a-object">Object</label>
-              <input type="text" id="a-object" name="object" autocomplete="off" spellcheck="false" placeholder="doc:roadmap" required>
-            </div>
-            <div class="field">
-              <label for="a-relation">Relation</label>
-              <input type="text" id="a-relation" name="relation" autocomplete="off" spellcheck="false" placeholder="viewer" required>
-            </div>
-            <div class="field">
-              <label for="a-subject">Subject</label>
-              <input type="text" id="a-subject" name="subject" autocomplete="off" spellcheck="false" placeholder="user:zed or group:eng#member" required>
-            </div>
-            <div class="actions">
-              <button class="btn btn-primary" type="submit">Add tuple</button>
-            </div>
+            <div class="field"><label for="a-object">Object</label><input type="text" id="a-object" name="object" autocomplete="off" spellcheck="false" placeholder="doc:roadmap" required></div>
+            <span class="tuple-form__sep" aria-hidden="true">#</span>
+            <div class="field"><label for="a-relation">Relation</label><input type="text" id="a-relation" name="relation" autocomplete="off" spellcheck="false" placeholder="viewer" required></div>
+            <span class="tuple-form__sep" aria-hidden="true">@</span>
+            <div class="field"><label for="a-subject">Subject</label><input type="text" id="a-subject" name="subject" autocomplete="off" spellcheck="false" placeholder="user:zed or group:eng#member" required></div>
+            <button class="btn btn-primary" type="submit">{{ICON_PLUS}}Add tuple</button>
           </form>
         </div>
-      </div>
+      </section>
 
-      <div class="card">
-        <div class="card__head"><h2>Import / export</h2></div>
-        <div class="card__body">
+      <section class="card">
+        <div class="card__head"><h2>Import / export</h2><span class="card__count">{{EXPORT_META}}</span></div>
+        <div class="card__pad">
           {{IMPORT_RESULT}}
-          <div class="export-actions">
-            <a class="btn btn-secondary" href="/export?format=json">Export JSON</a>
-            <a class="btn btn-secondary" href="/export?format=csv">Export CSV</a>
+          <div class="tags">
+            <a class="btn btn-secondary" href="/export?format=json">{{ICON_DOWNLOAD}}Export JSON</a>
+            <a class="btn btn-secondary" href="/export?format=csv">{{ICON_DOWNLOAD}}Export CSV</a>
           </div>
-          <form method="post" action="/import" class="save-form import-form">
+          <form method="post" action="/import" class="form-grid">
             <input type="hidden" name="csrf_token" value="{{CSRF}}">
-            <div class="field">
-              <label for="im-format">Format</label>
-              <select id="im-format" name="format">
-                <option value="json">JSON</option>
-                <option value="csv">CSV</option>
-              </select>
+            <div class="field"><label for="im-format">Format</label>
+              <select id="im-format" name="format"><option value="json">JSON</option><option value="csv">CSV</option></select>
             </div>
-            <div class="field">
-              <label for="im-content">Tuples</label>
+            <div class="field field--wide"><label for="im-content">Tuples</label>
               <textarea id="im-content" name="content" spellcheck="false" placeholder='[{"object":"doc:roadmap","relation":"viewer","subject":"user:zed"}]' required></textarea>
             </div>
-            <div class="actions">
-              <button class="btn btn-primary" type="submit">Import tuples</button>
-            </div>
+            <div class="form-actions"><button class="btn btn-primary" type="submit">{{ICON_UPLOAD}}Import tuples</button></div>
           </form>
         </div>
-      </div>
-    </section>
+      </section>
+    </div>
 
-    <aside class="rail">
+    <aside class="two-col__rail">
       <section class="card">
         <div class="card__head"><h2>Check tester</h2></div>
-        <div class="card__body">
+        <div class="card__pad">
           {{CHECK_RESULT}}
-          <form method="get" action="/" class="save-form">
-            <div class="field">
-              <label for="ck-object">Object</label>
-              <input type="text" id="ck-object" name="ck_object" value="{{CK_OBJECT}}" autocomplete="off" spellcheck="false" placeholder="doc:secret">
-            </div>
-            <div class="field">
-              <label for="ck-relation">Relation</label>
-              <input type="text" id="ck-relation" name="ck_relation" value="{{CK_RELATION}}" autocomplete="off" spellcheck="false" placeholder="viewer">
-            </div>
-            <div class="field">
-              <label for="ck-subject">Subject</label>
-              <input type="text" id="ck-subject" name="ck_subject" value="{{CK_SUBJECT}}" autocomplete="off" spellcheck="false" placeholder="user:w33d">
-            </div>
-            <div class="actions"><button class="btn btn-secondary" type="submit">Run check</button></div>
+          <form method="get" action="/" class="form-grid">
+            <div class="field field--wide"><label for="ck-object">Object</label><input type="text" id="ck-object" name="ck_object" value="{{CK_OBJECT}}" autocomplete="off" spellcheck="false" placeholder="doc:secret"></div>
+            <div class="field field--wide"><label for="ck-relation">Relation</label><input type="text" id="ck-relation" name="ck_relation" value="{{CK_RELATION}}" autocomplete="off" spellcheck="false" placeholder="viewer"></div>
+            <div class="field field--wide"><label for="ck-subject">Subject</label><input type="text" id="ck-subject" name="ck_subject" value="{{CK_SUBJECT}}" autocomplete="off" spellcheck="false" placeholder="user:w33d"></div>
+            <div class="form-actions"><button class="btn btn-secondary" type="submit">{{ICON_SEARCH}}Run check</button><span class="form-note">{{CK_META}}</span></div>
           </form>
-          <p class="hint hint--muted">Try <code>doc:secret · viewer · user:w33d</code> — allowed via <code>group:eng#member</code> indirection.</p>
         </div>
       </section>
 
       <section class="card">
-        <div class="card__head"><h2>Expand</h2></div>
-        <div class="card__body">
+        <div class="card__head"><h2>Expand</h2><a class="btn btn-ghost btn-sm" href="/expand">Full page</a></div>
+        <div class="card__pad">
           {{EXPAND_RESULT}}
-          <form method="get" action="/" class="save-form">
-            <div class="field">
-              <label for="ex-object">Object</label>
-              <input type="text" id="ex-object" name="ex_object" value="{{EX_OBJECT}}" autocomplete="off" spellcheck="false" placeholder="doc:secret">
-            </div>
-            <div class="field">
-              <label for="ex-relation">Relation</label>
-              <input type="text" id="ex-relation" name="ex_relation" value="{{EX_RELATION}}" autocomplete="off" spellcheck="false" placeholder="viewer">
-            </div>
-            <div class="actions"><button class="btn btn-secondary" type="submit">Who has it?</button></div>
+          <form method="get" action="/" class="form-grid">
+            <div class="field field--wide"><label for="ex-object">Object</label><input type="text" id="ex-object" name="ex_object" value="{{EX_OBJECT}}" autocomplete="off" spellcheck="false" placeholder="doc:secret"></div>
+            <div class="field field--wide"><label for="ex-relation">Relation</label><input type="text" id="ex-relation" name="ex_relation" value="{{EX_RELATION}}" autocomplete="off" spellcheck="false" placeholder="viewer"></div>
+            <div class="form-actions"><button class="btn btn-secondary" type="submit">{{ICON_BRANCH}}Who has it?</button></div>
           </form>
         </div>
       </section>
 
       <section class="card">
-        <div class="card__head"><h2>List objects</h2></div>
-        <div class="card__body">
+        <div class="card__head"><h2>List objects</h2><a class="btn btn-ghost btn-sm" href="/list-objects">Full page</a></div>
+        <div class="card__pad">
           {{LISTOBJ_RESULT}}
-          <form method="get" action="/" class="save-form">
-            <div class="field">
-              <label for="lo-relation">Relation</label>
-              <input type="text" id="lo-relation" name="lo_relation" value="{{LO_RELATION}}" autocomplete="off" spellcheck="false" placeholder="viewer">
-            </div>
-            <div class="field">
-              <label for="lo-subject">Subject</label>
-              <input type="text" id="lo-subject" name="lo_subject" value="{{LO_SUBJECT}}" autocomplete="off" spellcheck="false" placeholder="user:w33d">
-            </div>
-            <div class="actions"><button class="btn btn-secondary" type="submit">What can they do?</button></div>
+          <form method="get" action="/" class="form-grid">
+            <div class="field field--wide"><label for="lo-relation">Relation</label><input type="text" id="lo-relation" name="lo_relation" value="{{LO_RELATION}}" autocomplete="off" spellcheck="false" placeholder="viewer"></div>
+            <div class="field field--wide"><label for="lo-subject">Subject</label><input type="text" id="lo-subject" name="lo_subject" value="{{LO_SUBJECT}}" autocomplete="off" spellcheck="false" placeholder="user:w33d"></div>
+            <div class="form-actions"><button class="btn btn-secondary" type="submit">{{ICON_LIST}}What can they do?</button></div>
           </form>
         </div>
       </section>
     </aside>
   </div>
+
+  {{FOOTER}}
 </main>
 </body>
 </html>

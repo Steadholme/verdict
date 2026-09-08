@@ -6,8 +6,9 @@
 //! **expand** a relation (who holds it on an object); and **list objects** (what a subject can do).
 //!
 //! The three read tools are `GET /` with query parameters (read-only — no CSRF needed). Tuple
-//! mutations (`POST /`, `POST /delete`, `POST /import`) are double-submit CSRF protected. Every
-//! interpolated field is HTML-escaped; the inputs are opaque tuple tokens, never markup.
+//! mutations (`POST /`, `POST /delete`, `POST /import`) are double-submit CSRF protected, and a
+//! delete is confirmed on its own page (`GET /delete`) so the flow works without JavaScript.
+//! Every interpolated field is HTML-escaped; the inputs are opaque tuple tokens, never markup.
 
 use axum::extract::{Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -18,17 +19,29 @@ use serde::Deserialize;
 use crate::audit::AuditEvent;
 use crate::check;
 use crate::error::AppError;
-use crate::handlers::{app_css, esc, fmt_date, topbar};
+use crate::handlers::ui;
+use crate::handlers::{esc, fmt_date, shell, ICON_BRANCH, ICON_DOWNLOAD, ICON_LIST};
+use crate::handlers::{ICON_PLUS, ICON_SEARCH, ICON_TRASH, ICON_UPLOAD};
 use crate::store::Tuple;
 use crate::tuple_io;
 use crate::{auth, now_nanos, now_secs, AppState};
 
 const CONSOLE_HTML: &str = include_str!("../../templates/console.html");
+const CONFIRM_HTML: &str = include_str!("../../templates/confirm.html");
 
-/// Query parameters driving the three read tools. All optional; a tool renders its result only
-/// when its inputs are present and non-empty.
+/// Tuples shown per console page.
+const PAGE_SIZE: usize = 10;
+
+/// Query parameters driving the browse view and the three read tools. All optional; a tool renders
+/// its result only when its inputs are present and non-empty.
 #[derive(Debug, Default, Deserialize)]
 pub struct ConsoleQuery {
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    filter: Option<String>,
+    #[serde(default)]
+    page: Option<usize>,
     #[serde(default)]
     ck_object: Option<String>,
     #[serde(default)]
@@ -51,8 +64,9 @@ pub struct ConsoleQuery {
     import_skipped: Option<usize>,
 }
 
-/// Add-tuple form body. Identity is NEVER taken from the form — only from the gateway headers.
-#[derive(Debug, Deserialize)]
+/// Add/delete form body, and the confirm page's query. Identity is NEVER taken from the form —
+/// only from the gateway headers.
+#[derive(Debug, Default, Deserialize)]
 pub struct TupleForm {
     #[serde(default)]
     pub object: String,
@@ -86,8 +100,8 @@ pub struct ExportQuery {
 // GET / — the console
 // ---------------------------------------------------------------------------
 
-/// `GET /` — render the console: the read tools (with any results), the add form, and the tuple
-/// table.
+/// `GET /` — render the console: the tuple table (searched, filtered, paged), the add and import
+/// forms, and the three read tools with any results.
 pub async fn index(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -95,36 +109,85 @@ pub async fn index(
 ) -> Response {
     let id = auth::identity(&headers);
     let (csrf, set_cookie) = auth::ensure_csrf(&headers);
+    let epoch = state.policy.epoch().await.unwrap_or_default();
 
-    let tuples = state.store.list_tuples().await;
-    let count = tuples.len();
-    let rows = render_rows(&tuples, &csrf);
+    let tuples = state.store.all_tuples().await;
+    let total = tuples.len();
+    let usersets = tuples
+        .iter()
+        .filter(|t| check::is_userset(&t.subject))
+        .count();
+    let objects = distinct_objects(&tuples);
 
-    let check_result = render_check(&state, &q).await;
-    let expand_result = render_expand(&state, &q).await;
-    let listobj_result = render_list_objects(&state, &q).await;
-    let import_result = render_import_result(&q);
+    let search = nonempty(&q.q).unwrap_or("");
+    let filter = nonempty(&q.filter).unwrap_or("all");
+    let matched: Vec<&Tuple> = tuples
+        .iter()
+        .filter(|t| matches_search(t, search) && matches_filter(t, filter))
+        .collect();
+    let page = q.page.unwrap_or(1).max(1);
+    let start = (page - 1) * PAGE_SIZE;
+    let shown: Vec<&Tuple> = matched
+        .iter()
+        .skip(start)
+        .take(PAGE_SIZE)
+        .copied()
+        .collect();
 
-    let page = CONSOLE_HTML
-        .replace("{{CSS}}", app_css())
-        .replace("{{SHIELD}}", crate::handlers::SHIELD_SVG)
-        .replace("{{TOPBAR}}", &topbar("Authorization", &id.email))
+    let head_sub = format!(
+        "{} · {} · {} · expansion depth {}",
+        ui::plural(total, "tuple", "tuples"),
+        ui::plural(usersets, "userset", "usersets"),
+        format_args!("epoch {epoch}"),
+        check::MAX_DEPTH,
+    );
+
+    let page_html = shell(CONSOLE_HTML, &headers, "/", &id.email, epoch)
+        .replace("{{HEAD_SUB}}", &esc(&head_sub))
+        .replace("{{T_TUPLES}}", &ui::fmt_count(total))
+        .replace("{{T_USERSETS}}", &ui::fmt_count(usersets))
+        .replace("{{T_OBJECTS}}", &ui::fmt_count(objects.len()))
+        .replace("{{T_EPOCH}}", &epoch.to_string())
+        .replace("{{COUNT}}", &ui::fmt_count(matched.len()))
+        .replace("{{Q}}", &esc(search))
+        .replace(
+            "{{FILTER_CHIPS}}",
+            &filter_chips(&tuples, &objects, filter, search),
+        )
+        .replace("{{ROWS}}", &render_rows(&shown))
+        .replace(
+            "{{PAGER}}",
+            &pager(search, filter, page, matched.len(), shown.len()),
+        )
         .replace("{{CSRF}}", &esc(&csrf))
-        .replace("{{COUNT}}", &count.to_string())
-        .replace("{{ROWS}}", &rows)
-        .replace("{{IMPORT_RESULT}}", &import_result)
+        .replace(
+            "{{EXPORT_META}}",
+            &esc(&format!(
+                "{} · {}",
+                ui::plural(total, "tuple", "tuples"),
+                export_size(&tuples)
+            )),
+        )
+        .replace("{{IMPORT_RESULT}}", &render_import_result(&q))
         .replace("{{CK_OBJECT}}", &esc(opt(&q.ck_object)))
         .replace("{{CK_RELATION}}", &esc(opt(&q.ck_relation)))
         .replace("{{CK_SUBJECT}}", &esc(opt(&q.ck_subject)))
-        .replace("{{CHECK_RESULT}}", &check_result)
+        .replace("{{CHECK_RESULT}}", &render_check(&state, &q).await)
+        .replace("{{CK_META}}", &esc(&format!("epoch {epoch}")))
         .replace("{{EX_OBJECT}}", &esc(opt(&q.ex_object)))
         .replace("{{EX_RELATION}}", &esc(opt(&q.ex_relation)))
-        .replace("{{EXPAND_RESULT}}", &expand_result)
+        .replace("{{EXPAND_RESULT}}", &render_expand(&state, &q).await)
         .replace("{{LO_RELATION}}", &esc(opt(&q.lo_relation)))
         .replace("{{LO_SUBJECT}}", &esc(opt(&q.lo_subject)))
-        .replace("{{LISTOBJ_RESULT}}", &listobj_result);
+        .replace("{{LISTOBJ_RESULT}}", &render_list_objects(&state, &q).await)
+        .replace("{{ICON_PLUS}}", ICON_PLUS)
+        .replace("{{ICON_DOWNLOAD}}", ICON_DOWNLOAD)
+        .replace("{{ICON_UPLOAD}}", ICON_UPLOAD)
+        .replace("{{ICON_SEARCH}}", ICON_SEARCH)
+        .replace("{{ICON_BRANCH}}", ICON_BRANCH)
+        .replace("{{ICON_LIST}}", ICON_LIST);
 
-    html_with_cookie(page, set_cookie)
+    html_with_cookie(page_html, set_cookie)
 }
 
 // ---------------------------------------------------------------------------
@@ -164,8 +227,40 @@ pub async fn add(
 }
 
 // ---------------------------------------------------------------------------
-// POST /delete — remove a tuple
+// GET /delete — confirm, POST /delete — remove
 // ---------------------------------------------------------------------------
+
+/// `GET /delete?object=&relation=&subject=` — the confirmation page for one tuple. Read-only, so
+/// no CSRF is required to reach it; the POST it renders carries the token.
+pub async fn confirm_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(form): Query<TupleForm>,
+) -> Result<Response, AppError> {
+    let id = auth::identity(&headers);
+    let (csrf, set_cookie) = auth::ensure_csrf(&headers);
+    let epoch = state.policy.epoch().await.unwrap_or_default();
+    let (object, relation, subject) = validate(&form)?;
+
+    let consequence = format!(
+        "Checks that reach {subject} only through {label} flip to DENY at the next epoch. Audit: verdict.tuple.write · actor {actor}.",
+        subject = subject,
+        label = check::tuple_label(&object, &relation, &subject),
+        actor = id.email,
+    );
+    let page = shell(CONFIRM_HTML, &headers, "/", &id.email, epoch)
+        .replace(
+            "{{TUPLE_LINE}}",
+            &ui::tuple_line(&object, &relation, &subject, false),
+        )
+        .replace("{{CONSEQUENCE}}", &esc(&consequence))
+        .replace("{{CSRF}}", &esc(&csrf))
+        .replace("{{OBJECT}}", &esc(&object))
+        .replace("{{RELATION}}", &esc(&relation))
+        .replace("{{SUBJECT}}", &esc(&subject))
+        .replace("{{ICON_TRASH}}", ICON_TRASH);
+    Ok(html_with_cookie(page, set_cookie))
+}
 
 /// `POST /delete` — remove a relation tuple (CSRF-checked), then bounce back to the console.
 pub async fn delete(
@@ -280,43 +375,145 @@ pub async fn export(State(state): State<AppState>, Query(q): Query<ExportQuery>)
 // Render helpers
 // ---------------------------------------------------------------------------
 
-/// One table row per tuple, with a CSRF-protected inline delete form.
-fn render_rows(tuples: &[Tuple], csrf: &str) -> String {
+/// Every distinct `type:` prefix in the tuple set, with its tuple count, most common first.
+fn distinct_objects(tuples: &[Tuple]) -> Vec<String> {
+    let mut objects: Vec<String> = tuples.iter().map(|t| t.object.clone()).collect();
+    objects.sort();
+    objects.dedup();
+    objects
+}
+
+fn object_types(tuples: &[Tuple]) -> Vec<(String, usize)> {
+    let mut types: Vec<(String, usize)> = Vec::new();
+    for tuple in tuples {
+        let prefix = match tuple.object.split_once(':') {
+            Some((kind, _)) => format!("{kind}:"),
+            None => continue,
+        };
+        match types.iter_mut().find(|(name, _)| *name == prefix) {
+            Some((_, count)) => *count += 1,
+            None => types.push((prefix, 1)),
+        }
+    }
+    types.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    types.truncate(4);
+    types
+}
+
+fn matches_search(tuple: &Tuple, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let needle = needle.to_ascii_lowercase();
+    tuple.object.to_ascii_lowercase().contains(&needle)
+        || tuple.relation.to_ascii_lowercase().contains(&needle)
+        || tuple.subject.to_ascii_lowercase().contains(&needle)
+}
+
+fn matches_filter(tuple: &Tuple, filter: &str) -> bool {
+    match filter {
+        "all" | "" => true,
+        "usersets" => check::is_userset(&tuple.subject),
+        prefix => tuple.object.starts_with(prefix),
+    }
+}
+
+/// The filter chip row: All · usersets · the four commonest object types, each with its count.
+fn filter_chips(tuples: &[Tuple], _objects: &[String], active: &str, search: &str) -> String {
+    let mut chips = String::new();
+    let mut push = |value: &str, label: &str, count: usize| {
+        let mut href = format!("/?filter={}", urlencode(value));
+        if !search.is_empty() {
+            href.push_str(&format!("&q={}", urlencode(search)));
+        }
+        chips.push_str(&format!(
+            r#"<a class="fchip{active}" href="{href}">{label}<span class="fchip__n">{count}</span></a>"#,
+            active = if value == active { " is-active" } else { "" },
+            href = esc(&href),
+            label = esc(label),
+            count = ui::fmt_count(count),
+        ));
+    };
+    push("all", "All", tuples.len());
+    push(
+        "usersets",
+        "usersets",
+        tuples
+            .iter()
+            .filter(|t| check::is_userset(&t.subject))
+            .count(),
+    );
+    for (prefix, count) in object_types(tuples) {
+        push(&prefix, &prefix, count);
+    }
+    chips
+}
+
+/// The pagination footer: Previous · `1–10 of 1 284` · Next.
+fn pager(search: &str, filter: &str, page: usize, total: usize, shown: usize) -> String {
+    if total <= PAGE_SIZE {
+        return String::new();
+    }
+    let start = (page - 1) * PAGE_SIZE + 1;
+    let end = start + shown.saturating_sub(1);
+    let link = |target: usize, label: &str, enabled: bool| {
+        if !enabled {
+            return format!(
+                r#"<span class="btn btn-secondary btn-sm" aria-disabled="true">{label}</span>"#,
+                label = esc(label)
+            );
+        }
+        let mut href = format!("/?page={target}");
+        if !search.is_empty() {
+            href.push_str(&format!("&q={}", urlencode(search)));
+        }
+        if filter != "all" {
+            href.push_str(&format!("&filter={}", urlencode(filter)));
+        }
+        format!(
+            r#"<a class="btn btn-secondary btn-sm" href="{href}">{label}</a>"#,
+            href = esc(&href),
+            label = esc(label),
+        )
+    };
+    format!(
+        r#"<div class="table-meta"><span class="table-meta__showing"></span><div class="pagination">{prev}<span class="pagination__range">{start}–{end} of {total}</span>{next}</div></div>"#,
+        prev = link(page - 1, "Previous", page > 1),
+        start = start,
+        end = end,
+        total = ui::fmt_count(total),
+        next = link(page + 1, "Next", end < total),
+    )
+}
+
+/// One table row per tuple: three typed chips, the creation date, the write source and a delete
+/// link into the confirmation page.
+fn render_rows(tuples: &[&Tuple]) -> String {
     if tuples.is_empty() {
-        return r#"<tr><td colspan="5" class="t-empty">No tuples yet. Add one on the right.</td></tr>"#.to_string();
+        return r#"<tr><td colspan="6" class="empty">No tuples match. Add one below, or clear the filter.</td></tr>"#.to_string();
     }
     let mut out = String::new();
     for t in tuples {
-        let subject_cell = if check::is_userset(&t.subject) {
-            format!(
-                r#"<span class="tag tag--userset" title="userset (indirection)">{s}</span>"#,
-                s = esc(&t.subject)
-            )
-        } else {
-            format!(r#"<span class="tag">{s}</span>"#, s = esc(&t.subject))
-        };
+        let href = format!(
+            "/delete?object={}&relation={}&subject={}",
+            urlencode(&t.object),
+            urlencode(&t.relation),
+            urlencode(&t.subject),
+        );
         out.push_str(&format!(
             r#"<tr>
-  <td><code>{object}</code></td>
-  <td><span class="rel">{relation}</span></td>
-  <td>{subject_cell}</td>
-  <td class="t-date">{date}</td>
-  <td class="t-actions">
-    <form class="inline-form" method="post" action="/delete" onsubmit="return confirm('Delete this tuple?');">
-      <input type="hidden" name="csrf_token" value="{csrf}">
-      <input type="hidden" name="object" value="{object}">
-      <input type="hidden" name="relation" value="{relation}">
-      <input type="hidden" name="subject" value="{subject}">
-      <button class="btn btn-danger btn-sm" type="submit">Delete</button>
-    </form>
-  </td>
+  <td>{object}</td>
+  <td>{relation}</td>
+  <td>{subject}</td>
+  <td class="c-when">{date}</td>
+  <td class="c-src">console</td>
+  <td class="c-act"><a class="btn btn-danger-soft btn-sm" href="{href}">Delete</a></td>
 </tr>"#,
-            object = esc(&t.object),
-            relation = esc(&t.relation),
-            subject = esc(&t.subject),
-            subject_cell = subject_cell,
+            object = ui::chip("object", &t.object, false),
+            relation = ui::chip("relation", &t.relation, false),
+            subject = ui::subject_chip(&t.subject, false),
             date = esc(&fmt_date(t.created_at)),
-            csrf = esc(csrf),
+            href = esc(&href),
         ));
     }
     out
@@ -333,33 +530,53 @@ async fn render_check(state: &AppState, q: &ConsoleQuery) -> String {
     };
 
     let outcome = check::check(state.store.as_ref(), object, relation, subject).await;
-    let (klass, verdict) = if outcome.allowed {
-        ("result--allow", "ALLOWED")
+    let (klass, word, note) = if outcome.allowed {
+        (
+            "allow",
+            "ALLOW",
+            format!("granted in {} steps", outcome.via.len()),
+        )
     } else {
-        ("result--deny", "DENIED")
+        (
+            "deny",
+            "DENY",
+            format!(
+                "no direct tuple and no userset reaches this subject within {} levels",
+                check::MAX_DEPTH
+            ),
+        )
     };
 
-    let path = if outcome.via.is_empty() {
-        r#"<p class="result__note">No grant path — no direct tuple and no userset reaches this subject within 5 levels.</p>"#.to_string()
+    let mut steps = String::new();
+    if outcome.via.is_empty() {
+        steps.push_str(&format!(r#"<p class="note">{}</p>"#, esc("no grant path")));
     } else {
-        let mut steps = String::from(r#"<ol class="path">"#);
-        for step in &outcome.via {
-            steps.push_str(&format!(r#"<li><code>{}</code></li>"#, esc(step)));
+        steps.push_str(r#"<ol class="path">"#);
+        for (index, step) in outcome.via.iter().enumerate() {
+            let (obj, rel, sub) = split_label(step);
+            steps.push_str(&format!(
+                r#"<li class="path__step"><span class="path__no">{no}</span><div class="path__body"><span class="tline">{line}</span><span class="path__note">{note}</span></div></li>"#,
+                no = index + 1,
+                line = ui::tuple_line(&obj, &rel, &sub, true),
+                note = esc(if check::is_userset(&sub) {
+                    "userset · expands to its members"
+                } else if index == 0 {
+                    "direct tuple on the object"
+                } else {
+                    "reaches the subject"
+                }),
+            ));
         }
         steps.push_str("</ol>");
-        format!(r#"<p class="result__note">Resolution path:</p>{steps}"#)
-    };
+    }
 
     format!(
-        r#"<div class="result {klass}">
-  <div class="result__head"><span class="result__verdict">{verdict}</span>
-    <code class="result__query">{q}</code></div>
-  {path}
-</div>"#,
+        r#"<div class="verdict verdict--{klass}"><div class="verdict__head"><span class="verdict__word">{word}</span><span class="verdict__query">{query}</span></div><span class="verdict__note">{note}</span></div><div class="card__pad">{steps}</div>"#,
         klass = klass,
-        verdict = verdict,
-        q = esc(&check::tuple_label(object, relation, subject)),
-        path = path,
+        word = word,
+        query = esc(&check::tuple_label(object, relation, subject)),
+        note = esc(&note),
+        steps = steps,
     )
 }
 
@@ -370,21 +587,16 @@ async fn render_expand(state: &AppState, q: &ConsoleQuery) -> String {
     };
 
     let e = check::expand(state.store.as_ref(), object, relation).await;
-    let direct = chips(&e.direct, "no direct grants");
-    let members = chips(&e.members, "no concrete members");
-    let tree = access_tree(&e.tree);
-
     format!(
-        r#"<div class="result result--info">
-  <div class="result__head"><code class="result__query">{q}</code></div>
-  <p class="result__note">Direct grants:</p>{direct}
-  <p class="result__note">Resolved members (usersets flattened):</p>{members}
-  <p class="result__note">Access tree:</p>{tree}
-</div>"#,
-        q = esc(&format!("{object}#{relation}")),
-        direct = direct,
-        members = members,
-        tree = tree,
+        r#"<div class="tline">{query}</div>
+<span class="sublabel">Direct grants</span>{direct}
+<span class="sublabel">Resolved members</span>{members}
+<span class="sublabel">Access tree</span>{tree}"#,
+        query =
+            ui::chip("object", object, true).to_string() + &ui::chip("relation", relation, true),
+        direct = ui::chip_row(&e.direct, "no direct grants"),
+        members = ui::chip_row(&e.members, "no concrete members"),
+        tree = ui::access_tree(&e.tree),
     )
 }
 
@@ -396,68 +608,22 @@ async fn render_list_objects(state: &AppState, q: &ConsoleQuery) -> String {
     };
 
     let objects = check::list_objects(state.store.as_ref(), relation, subject).await;
-    let chips = chips(&objects, "no objects");
+    let mut chips = String::from(r#"<div class="chips">"#);
+    for object in &objects {
+        chips.push_str(&ui::chip("object", object, true));
+    }
+    chips.push_str("</div>");
+    if objects.is_empty() {
+        chips = r#"<p class="note">no objects</p>"#.to_string();
+    }
 
     format!(
-        r#"<div class="result result--info">
-  <div class="result__head"><code class="result__query">{subject} · {relation}</code></div>
-  <p class="result__note">Objects this subject can <strong>{relation}</strong>:</p>{chips}
-</div>"#,
-        subject = esc(subject),
-        relation = esc(relation),
+        r#"<div class="tline">{subject}<span class="tsep">·</span>{relation}</div>{chips}<p class="note">{count}</p>"#,
+        subject = ui::subject_chip(subject, true),
+        relation = ui::chip("relation", relation, true),
         chips = chips,
+        count = esc(&ui::plural(objects.len(), "object", "objects")),
     )
-}
-
-/// Render a list of strings as chips, or a muted "empty" note.
-fn chips(items: &[String], empty: &str) -> String {
-    if items.is_empty() {
-        return format!(r#"<p class="muted result__empty">{}</p>"#, esc(empty));
-    }
-    let mut out = String::from(r#"<div class="chips">"#);
-    for item in items {
-        let klass = if check::is_userset(item) {
-            "chip chip--userset"
-        } else {
-            "chip"
-        };
-        out.push_str(&format!(r#"<span class="{klass}">{}</span>"#, esc(item)));
-    }
-    out.push_str("</div>");
-    out
-}
-
-fn access_tree(nodes: &[check::ExpansionNode]) -> String {
-    if nodes.is_empty() {
-        return r#"<p class="muted result__empty">no grants</p>"#.to_string();
-    }
-    let mut out = String::from(r#"<ul class="access-tree">"#);
-    for node in nodes {
-        render_access_node(node, &mut out);
-    }
-    out.push_str("</ul>");
-    out
-}
-
-fn render_access_node(node: &check::ExpansionNode, out: &mut String) {
-    let klass = if node.userset {
-        "access-tree__token access-tree__token--userset"
-    } else {
-        "access-tree__token"
-    };
-    out.push_str(&format!(
-        r#"<li><span class="{klass}">{subject}</span>"#,
-        klass = klass,
-        subject = esc(&node.subject),
-    ));
-    if !node.children.is_empty() {
-        out.push_str(r#"<ul class="access-tree">"#);
-        for child in &node.children {
-            render_access_node(child, out);
-        }
-        out.push_str("</ul>");
-    }
-    out.push_str("</li>");
 }
 
 fn render_import_result(q: &ConsoleQuery) -> String {
@@ -467,11 +633,46 @@ fn render_import_result(q: &ConsoleQuery) -> String {
         return String::new();
     };
     format!(
-        r#"<div class="notice notice-ok import-status">Imported {written}/{total} tuple(s). {skipped} duplicate/existing.</div>"#,
+        r#"<div class="banner banner--ok"><span class="banner__msg">Imported {written} of {total} · {skipped} duplicate or existing</span></div>"#,
         total = total,
         written = written,
         skipped = skipped,
     )
+}
+
+/// The exported payload size, in the unit the operator will recognise.
+fn export_size(tuples: &[Tuple]) -> String {
+    let bytes = tuple_io::export_json(tuples).len();
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else {
+        format!("{:.0} KiB", bytes as f64 / 1024.0)
+    }
+}
+
+/// Split `object#relation@subject` back into its three parts for chip rendering.
+fn split_label(label: &str) -> (String, String, String) {
+    let (object, rest) = label.split_once('#').unwrap_or((label, ""));
+    let (relation, subject) = rest.split_once('@').unwrap_or((rest, ""));
+    (
+        object.to_string(),
+        relation.to_string(),
+        subject.to_string(),
+    )
+}
+
+/// Percent-encode a query value (tuple tokens carry `#`, `:` and `@`).
+pub fn urlencode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 /// Validate + trim an add/delete form's triple. Each field non-empty, no internal whitespace.
@@ -513,6 +714,11 @@ fn opt(field: &Option<String>) -> &str {
 }
 
 /// A 303 redirect (post/redirect/get).
+pub fn redirect_to(location: &str) -> Response {
+    redirect(location)
+}
+
+/// A 303 redirect (post/redirect/get).
 fn redirect(location: &str) -> Response {
     (
         StatusCode::SEE_OTHER,
@@ -537,7 +743,7 @@ fn download_response(content_type: &'static str, filename: &'static str, body: S
 }
 
 /// An HTML response, optionally attaching a freshly-minted CSRF `Set-Cookie`.
-fn html_with_cookie(body: String, set_cookie: Option<String>) -> Response {
+pub fn html_with_cookie(body: String, set_cookie: Option<String>) -> Response {
     let mut resp = Html(body).into_response();
     if let Some(c) = set_cookie {
         if let Ok(value) = HeaderValue::from_str(&c) {

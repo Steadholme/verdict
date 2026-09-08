@@ -93,3 +93,27 @@ cargo test                  # in-memory, no database, no network
 # Postgres integration (optional):
 #   TEST_DATABASE_URL=postgres://… cargo test --test pg_store -- --nocapture
 ```
+
+## 前端 v2（2026-09-08）
+
+控制台按 Figma 文件 `iS3iDUEUHMzGvXmOipjAbO`（Verdict，wine accent）重做，拆成四个页面，
+应用栏用同一组导航药丸串起来：
+
+| 路由 | 页面 |
+|---|---|
+| `/` | Relation tuples 表（搜索 / 类型筛选 / 分页）、Add tuple、Import·export，右栏 Check tester + Expand + List objects |
+| `/decisions` | v2 决策检查器：请求表单（subject / permission / resource / context / risk）→ 判定横幅、决策事实表、证据行、响应 JSON |
+| `/expand` | 整页展开：访问树、直接授予、展平成员、展开事实 |
+| `/list-objects` | 主体可达对象，标出经由哪个 userset |
+| `/subjects` | JML 生命周期记录与围栏写入表单 |
+| `/api` | 端点表（每条带凭据 scope）、两段 curl 示例、三个凭据 |
+
+一条关系元组在任何位置都渲染成三枚定型 chip（蓝 object · 酒红 relation · 灰 subject，
+userset 为紫色虚线），删除走独立确认页 `GET /delete`（POST 仍带 CSRF），无需 JavaScript。
+
+**凭据只显示指纹。** `/api` 页面给出每个 token 的名字、长度与 `sha256` 前 16 位，
+**不渲染 token 值** —— 控制台读者不应能从页面上取走服务凭据（设计稿里的 Reveal 按钮据此去掉，
+`tests/verdict_flow.rs::api_page_shows_fingerprints_not_token_values` 固定这条）。
+
+样式在 `static/service.css`，与 Odyssey 基底层叠后由 `/assets/verdict-20260908.css` 以不可变
+缓存提供；改样式时同步提升该路径里的日期（测试会断言路径）。

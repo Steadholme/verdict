@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en"{{THEME_ATTR}}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="{{COLOR_SCHEME}}">
+  <title>API &amp; tokens · Verdict · Steadholme</title>
+  <link rel="stylesheet" href="{{CSS_PATH}}">
+</head>
+<body class="page-v2">
+{{APPBAR}}
+<main class="v2-page">
+  <header class="pagehead">
+    <div class="pagehead__titles">
+      <h1>API &amp; tokens</h1>
+      <p class="pagehead__sub">3 credential scopes · pairwise distinct · 32–512 visible ASCII bytes · Authorization: Bearer</p>
+    </div>
+  </header>
+
+  <div class="two-col">
+    <div class="two-col__main">
+      <section class="card">
+        <div class="card__head"><h2>Endpoints</h2><span class="card__count">{{ENDPOINT_COUNT}}</span></div>
+        {{ENDPOINTS}}
+      </section>
+      <section class="card">
+        <div class="card__head"><h2>Examples</h2></div>
+        <div class="card__pad">{{EXAMPLES}}</div>
+      </section>
+    </div>
+    <aside class="two-col__rail">
+      <section class="card">
+        <div class="card__head"><h2>Credentials</h2><span class="card__count">3</span></div>
+        <div class="card__pad"><div class="tokens">{{TOKENS}}</div></div>
+      </section>
+      <section class="card">
+        <div class="card__head"><h2>Rules</h2></div>
+        <div class="defs">
+          <div class="defs__row"><span class="defs__term">Length</span><span class="defs__value">32–512 visible ASCII</span></div>
+          <div class="defs__row"><span class="defs__term">Distinct</span><span class="defs__value">pairwise · never derived from one another</span></div>
+          <div class="defs__row"><span class="defs__term">Cross-scope</span><span class="defs__value">401 on every other scope</span></div>
+          <div class="defs__row"><span class="defs__term">Legacy</span><span class="defs__value mono">VERDICT_SERVICE_TOKEN = startup error</span></div>
+          <div class="defs__row"><span class="defs__term">Store</span><span class="defs__value">postgres requires all three</span></div>
+          <div class="defs__row"><span class="defs__term">Console</span><span class="defs__value">values are never rendered · fingerprint only</span></div>
+        </div>
+      </section>
+      <section class="card">
+        <div class="card__head"><h2>Audit</h2></div>
+        <div class="defs">
+          <div class="defs__row"><span class="defs__term mono">verdict.tuple.write</span><span class="defs__value">writes · deletes · imports</span></div>
+          <div class="defs__row"><span class="defs__term mono">verdict.subject.status</span><span class="defs__value">lifecycle changes</span></div>
+          <div class="defs__row"><span class="defs__term">Actor</span><span class="defs__value mono">service:decision · service:projection · service:lifecycle</span></div>
+          <div class="defs__row"><span class="defs__term">Sink</span><span class="defs__value">{{AUDIT_SINK}}</span></div>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  {{FOOTER}}
+</main>
+</body>
+</html>
